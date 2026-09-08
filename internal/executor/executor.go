@@ -93,8 +93,73 @@ func (e *Executor) IsDestructive(cmd string) bool {
 	return false
 }
 
+// NeedsWSL checks if a command uses Unix-style syntax that PowerShell can't handle.
+// On Windows with WSL available, these get routed through WSL automatically.
+func (e *Executor) NeedsWSL(command string) bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	if _, err := exec.LookPath("wsl.exe"); err != nil {
+		return false
+	}
+	tokens := strings.Fields(command)
+	if len(tokens) == 0 {
+		return false
+	}
+	cmd := strings.ToLower(tokens[0])
+
+	// Commands that exist in both worlds but behave differently
+	unixOnly := map[string]bool{
+		"grep": true, "awk": true, "sed": true, "tail": true, "head": true,
+		"wc": true, "sort": true, "uniq": true, "tr": true, "cut": true,
+		"find": true, "xargs": true, "chmod": true, "chown": true,
+		"tar": true, "gzip": true, "gunzip": true, "df": true, "du": true,
+		"top": true, "htop": true, "kill": true, "ps": true, "man": true,
+		"touch": true, "ln": true, "diff": true, "patch": true,
+		"ssh": true, "scp": true, "rsync": true, "wget": true,
+	}
+	if unixOnly[cmd] {
+		return true
+	}
+
+	// ls/cat/cp/mv/rm with Unix-style flags (single dash + letters, not PowerShell style)
+	dualCommands := map[string]bool{
+		"ls": true, "cat": true, "cp": true, "mv": true, "rm": true,
+		"mkdir": true, "echo": true,
+	}
+	if dualCommands[cmd] && len(tokens) > 1 {
+		for _, tok := range tokens[1:] {
+			// Unix flag pattern: -<letters> where letters are lowercase (not PowerShell -ParamName)
+			if len(tok) >= 2 && tok[0] == '-' && tok[1] != '-' {
+				allLower := true
+				for _, ch := range tok[1:] {
+					if ch < 'a' || ch > 'z' {
+						allLower = false
+						break
+					}
+				}
+				if allLower {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+func (e *Executor) wslShell() (string, []string) {
+	return "wsl.exe", []string{"-d", e.wslDistro, "--", "bash", "-c"}
+}
+
 func (e *Executor) Run(command string) (RunResult, error) {
-	shell, args := e.DetectShell()
+	var shell string
+	var args []string
+	if e.NeedsWSL(command) {
+		shell, args = e.wslShell()
+	} else {
+		shell, args = e.DetectShell()
+	}
 	cmdArgs := append(args, command)
 	start := time.Now()
 

@@ -53,7 +53,7 @@ func New(cfg config.Config) *REPL {
 	hist := history.New(histDir, cfg.History.OutputPreviewChars)
 	hist.Rotate(cfg.History.RetentionDays)
 
-	return &REPL{
+	r := &REPL{
 		cfg:        cfg,
 		classifier: classifier.New(pathLookup, wfMgr.Names()),
 		executor:   executor.New(cfg.Shell.Default, cfg.Shell.WSLDistro),
@@ -63,6 +63,8 @@ func New(cfg config.Config) *REPL {
 		search:     search.New(cfg.Search.Engines, cfg.Search.DefaultEngine),
 		ollamaOK:   ollamaClient.CheckHealth(),
 	}
+	r.autoDetectModel()
+	return r
 }
 
 func (r *REPL) Run() error {
@@ -351,6 +353,10 @@ func (r *REPL) handleBuiltin(input string) {
 		r.handleReplay(args)
 	case "config":
 		r.handleConfig()
+	case "models":
+		r.handleListModels()
+	case "model":
+		r.handleSetModel(args)
 	default:
 		fmt.Printf("[nsh] Unknown command: nsh %s\n", parts[1])
 		fmt.Println("Run \"nsh help\" for available commands.")
@@ -597,29 +603,128 @@ func (r *REPL) handleConfig() {
 	cmd.Run()
 }
 
+func (r *REPL) handleListModels() {
+	if !r.ollamaOK {
+		r.ollamaOK = r.ollama.CheckHealth()
+	}
+	if !r.ollamaOK {
+		fmt.Println("[nsh] Ollama not running. Start it with: ollama serve")
+		return
+	}
+	models, err := r.ollama.ListModels()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[nsh] error listing models: %v\n", err)
+		return
+	}
+	if len(models) == 0 {
+		fmt.Println("[nsh] No models installed. Pull one with: ollama pull llama3.2:3b")
+		return
+	}
+	fmt.Println("[nsh] Available Ollama models:")
+	for _, m := range models {
+		sizeMB := float64(m.Size) / 1024 / 1024
+		marker := ""
+		if m.Name == r.ollama.GenerationModel() {
+			marker = " <- generation"
+		}
+		if m.Name == r.ollama.ClassifierModel() {
+			marker += " <- classifier"
+		}
+		fmt.Printf("  %-30s %6.0f MB%s\n", m.Name, sizeMB, marker)
+	}
+	fmt.Println()
+	fmt.Printf("  Current generation model:  %s\n", r.ollama.GenerationModel())
+	fmt.Printf("  Current classifier model:  %s\n", r.ollama.ClassifierModel())
+	fmt.Println()
+	fmt.Println("  Switch with: nsh model <name>")
+	fmt.Println("  Switch classifier: nsh model classifier <name>")
+}
+
+func (r *REPL) handleSetModel(args []string) {
+	if len(args) == 0 {
+		fmt.Println("[nsh] Usage:")
+		fmt.Println("  nsh model <name>              Set generation model")
+		fmt.Println("  nsh model classifier <name>   Set classifier model")
+		fmt.Printf("\n  Current generation:  %s\n", r.ollama.GenerationModel())
+		fmt.Printf("  Current classifier:  %s\n", r.ollama.ClassifierModel())
+		return
+	}
+
+	if args[0] == "classifier" {
+		if len(args) < 2 {
+			fmt.Println("[nsh] Usage: nsh model classifier <name>")
+			return
+		}
+		r.ollama.SetClassifierModel(args[1])
+		r.cfg.Ollama.ClassifierModel = args[1]
+		config.Save(r.cfg, filepath.Join(config.Dir(), "config.toml"))
+		fmt.Printf("[nsh] Classifier model set to: %s\n", args[1])
+		return
+	}
+
+	r.ollama.SetGenerationModel(args[0])
+	r.cfg.Ollama.GenerationModel = args[0]
+	config.Save(r.cfg, filepath.Join(config.Dir(), "config.toml"))
+	fmt.Printf("[nsh] Generation model set to: %s\n", args[0])
+}
+
+func (r *REPL) autoDetectModel() {
+	if !r.ollamaOK {
+		return
+	}
+	models, err := r.ollama.ListModels()
+	if err != nil || len(models) == 0 {
+		return
+	}
+
+	// Check if configured model exists
+	genModel := r.ollama.GenerationModel()
+	found := false
+	for _, m := range models {
+		if m.Name == genModel {
+			found = true
+			break
+		}
+	}
+	if found {
+		return
+	}
+
+	// Pick the first available model as fallback
+	fallback := models[0].Name
+	r.ollama.SetGenerationModel(fallback)
+	r.ollama.SetClassifierModel(fallback)
+	fmt.Printf("[nsh] Model %q not found. Using %q instead.\n", genModel, fallback)
+	fmt.Println("      Run \"nsh models\" to see available models, \"nsh model <name>\" to switch.")
+}
+
 func (r *REPL) printHelp() {
 	fmt.Println(`nsh — the natural shell
 
 Usage:
   Type commands normally, or use plain English.
   Prefix with google/search/wiki/yt/gh to search the web.
+  Unix commands (ls -ltr, grep, etc.) auto-route through WSL on Windows.
 
 Built-in commands:
-  nsh help                  Show this help
-  nsh record start          Start recording a workflow
-  nsh record stop "name"    Stop recording and save as workflow
-  nsh save-last N "name"    Save last N commands as a workflow
-  nsh workflows             List saved workflows
-  nsh edit <name>           Edit a workflow in your editor
-  nsh delete <name>         Delete a workflow
-  nsh history               Show today's command history
-  nsh history yesterday     Show yesterday's history
-  nsh history week          Show last 7 days
-  nsh history YYYY-MM-DD    Show specific date
-  nsh replay HH:MM          Show details of a command at that time
-  nsh replay HH:MM --run    Re-execute that command
-  nsh config                Open config in your editor
-  exit / quit               Exit nsh`)
+  nsh help                       Show this help
+  nsh models                     List available Ollama models
+  nsh model <name>               Set generation model
+  nsh model classifier <name>    Set classifier model
+  nsh record start               Start recording a workflow
+  nsh record stop "name"         Stop recording and save as workflow
+  nsh save-last N "name"         Save last N commands as a workflow
+  nsh workflows                  List saved workflows
+  nsh edit <name>                Edit a workflow in your editor
+  nsh delete <name>              Delete a workflow
+  nsh history                    Show today's command history
+  nsh history yesterday          Show yesterday's history
+  nsh history week               Show last 7 days
+  nsh history YYYY-MM-DD         Show specific date
+  nsh replay HH:MM               Show details of a command at that time
+  nsh replay HH:MM --run         Re-execute that command
+  nsh config                     Open config in your editor
+  exit / quit                    Exit nsh`)
 }
 
 func (r *REPL) saveHistory(input, inputType, generated string, exitCode int, output string, durationMs int64) {

@@ -160,6 +160,50 @@ func (c *Client) GenerateStream(ctx context.Context, input string, cwd string, o
 	return strings.TrimSpace(full.String()), nil
 }
 
+type ModelInfo struct {
+	Name       string `json:"name"`
+	Size       int64  `json:"size"`
+	ModifiedAt string `json:"modified_at"`
+}
+
+func (c *Client) ListModels() ([]ModelInfo, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/api/tags", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Models []ModelInfo `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return result.Models, nil
+}
+
+func (c *Client) SetGenerationModel(model string) {
+	c.generationModel = model
+}
+
+func (c *Client) SetClassifierModel(model string) {
+	c.classifierModel = model
+}
+
+func (c *Client) GenerationModel() string {
+	return c.generationModel
+}
+
+func (c *Client) ClassifierModel() string {
+	return c.classifierModel
+}
+
 func (c *Client) CheckHealth() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
