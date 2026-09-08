@@ -33,6 +33,7 @@ type REPL struct {
 	recording  bool
 	recorded   []string
 	ollamaOK   bool
+	services   *executor.ServiceRunner
 }
 
 func New(cfg config.Config) *REPL {
@@ -364,6 +365,11 @@ func (r *REPL) handleWorkflow(name string) {
 		return
 	}
 
+	if wf.Mode == "parallel" && len(wf.Services) > 0 {
+		r.handleUp([]string{name})
+		return
+	}
+
 	fmt.Printf("[nsh] Running workflow %q (%d steps)\n", wf.Name, len(wf.Steps))
 	start := time.Now()
 
@@ -435,6 +441,12 @@ func (r *REPL) handleBuiltin(input string) {
 		r.handleSetModel(args)
 	case "theme":
 		r.handleTheme(args)
+	case "up":
+		r.handleUp(args)
+	case "down":
+		r.handleDown()
+	case "status":
+		r.handleStatus()
 	default:
 		fmt.Printf("[nsh] Unknown command: nsh %s\n", parts[1])
 		fmt.Println("Run \"nsh help\" for available commands.")
@@ -593,6 +605,103 @@ func (r *REPL) handleDeleteWorkflow(args []string) {
 		return
 	}
 	fmt.Printf("[nsh] Workflow %q deleted.\n", args[0])
+}
+
+func (r *REPL) handleUp(args []string) {
+	if len(args) == 0 {
+		fmt.Println("[nsh] Usage: nsh up <workflow-name>")
+		fmt.Println("      Launches services defined in a parallel workflow.")
+		fmt.Println("      Create one with: nsh edit <name>, then add [services] sections.")
+		fmt.Println()
+		fmt.Println("  Example workflow file (morning-stack.toml):")
+		fmt.Println(`    name = "morning-stack"`)
+		fmt.Println(`    mode = "parallel"`)
+		fmt.Println()
+		fmt.Println(`    [[services]]`)
+		fmt.Println(`    name = "tpro-backend"`)
+		fmt.Println(`    dir = "~/tpro_backend"`)
+		fmt.Println(`    command = "npm run dev"`)
+		fmt.Println()
+		fmt.Println(`    [[services]]`)
+		fmt.Println(`    name = "investment"`)
+		fmt.Println(`    dir = "~/repo/investment"`)
+		fmt.Println(`    setup = "venv/Scripts/activate.ps1"`)
+		fmt.Println(`    command = "uvicorn main:app --reload"`)
+		return
+	}
+
+	wf, err := r.workflows.Load(args[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[nsh] %v\n", err)
+		return
+	}
+
+	if len(wf.Services) == 0 {
+		fmt.Println("[nsh] This workflow has no [services] defined.")
+		fmt.Println("      Use \"nsh edit " + args[0] + "\" to add [[services]] sections.")
+		return
+	}
+
+	if r.services != nil {
+		running := r.services.Running()
+		if len(running) > 0 {
+			fmt.Printf("[nsh] Services already running: %s\n", strings.Join(running, ", "))
+			fmt.Println("      Run \"nsh down\" first to stop them.")
+			return
+		}
+	}
+
+	var defs []executor.ServiceDef
+	for _, s := range wf.Services {
+		defs = append(defs, executor.ServiceDef{
+			Name:    s.Name,
+			Dir:     s.Dir,
+			Setup:   s.Setup,
+			Command: s.Command,
+		})
+	}
+
+	r.services = executor.NewServiceRunner()
+	fmt.Printf("[nsh] Starting %d services from %q...\n", len(defs), wf.Name)
+	if err := r.services.LaunchAll(defs); err != nil {
+		fmt.Fprintf(os.Stderr, "[nsh] launch error: %v\n", err)
+		return
+	}
+	fmt.Println("[nsh] All services launched. Logs stream above.")
+	fmt.Println("      Use \"nsh status\" to check, \"nsh down\" to stop all.")
+}
+
+func (r *REPL) handleDown() {
+	if r.services == nil {
+		fmt.Println("[nsh] No services running.")
+		return
+	}
+	running := r.services.Running()
+	if len(running) == 0 {
+		fmt.Println("[nsh] No services running.")
+		r.services = nil
+		return
+	}
+	fmt.Printf("[nsh] Stopping %d services: %s\n", len(running), strings.Join(running, ", "))
+	r.services.StopAll()
+	r.services = nil
+	fmt.Println("[nsh] All services stopped.")
+}
+
+func (r *REPL) handleStatus() {
+	if r.services == nil {
+		fmt.Println("[nsh] No services running.")
+		return
+	}
+	running := r.services.Running()
+	if len(running) == 0 {
+		fmt.Println("[nsh] No services running.")
+		return
+	}
+	fmt.Printf("[nsh] Running services (%d):\n", len(running))
+	for _, name := range running {
+		fmt.Printf("  %s\n", name)
+	}
 }
 
 func (r *REPL) handleHistory(args []string) {
@@ -811,6 +920,9 @@ Built-in commands:
   nsh workflows                  List saved workflows
   nsh edit <name>                Edit a workflow in your editor
   nsh delete <name>              Delete a workflow
+  nsh up <name>                  Launch parallel services from a workflow
+  nsh down                       Stop all running services
+  nsh status                     Show running services
   nsh history                    Show today's command history
   nsh history yesterday          Show yesterday's history
   nsh history week               Show last 7 days

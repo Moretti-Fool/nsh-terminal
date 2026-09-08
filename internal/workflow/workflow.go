@@ -15,11 +15,21 @@ type Step struct {
 	Shell   string `toml:"shell,omitempty"`
 }
 
+type Service struct {
+	Name    string `toml:"name"`
+	Dir     string `toml:"dir"`
+	Command string `toml:"command"`
+	Shell   string `toml:"shell,omitempty"`
+	Setup   string `toml:"setup,omitempty"`
+}
+
 type Workflow struct {
 	Name        string    `toml:"name"`
 	Description string    `toml:"description,omitempty"`
 	Created     time.Time `toml:"created"`
+	Mode        string    `toml:"mode,omitempty"`
 	Steps       []Step    `toml:"steps"`
+	Services    []Service `toml:"services,omitempty"`
 }
 
 type Manager struct {
