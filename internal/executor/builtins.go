@@ -19,12 +19,33 @@ type lsFlags struct {
 	human   bool
 }
 
+var lsFlagChars = map[byte]bool{'l': true, 'a': true, 't': true, 'r': true, 'h': true}
+
+func looksLikeFlags(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if !lsFlagChars[s[i]] {
+			return false
+		}
+	}
+	return true
+}
+
 func parseLsFlags(tokens []string) (lsFlags, []string) {
 	var f lsFlags
 	var rest []string
 	for _, t := range tokens {
+		flagStr := ""
 		if strings.HasPrefix(t, "-") && len(t) > 1 && t[1] != '-' {
-			for _, ch := range t[1:] {
+			flagStr = t[1:]
+		} else if looksLikeFlags(t) {
+			flagStr = t
+		}
+
+		if flagStr != "" {
+			for _, ch := range flagStr {
 				switch ch {
 				case 'l':
 					f.long = true

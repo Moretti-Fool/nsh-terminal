@@ -309,13 +309,52 @@ func (r *REPL) handleNL(input string) {
 }
 
 func (r *REPL) handleSearch(engine, query string) {
-	searchURL, err := r.search.Open(engine, query)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[nsh] search error: %v\n", err)
+	aiOnly := engine == "ask"
+	aiBoth := strings.HasSuffix(engine, "!")
+	browserEngine := strings.TrimSuffix(engine, "!")
+
+	if aiOnly || aiBoth {
+		r.searchAISummary(query)
+	}
+
+	if !aiOnly {
+		if browserEngine == "ask" {
+			browserEngine = "google"
+		}
+		searchURL, err := r.search.Open(browserEngine, query)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[nsh] search error: %v\n", err)
+			return
+		}
+		fmt.Printf("[nsh] Opened: %s\n", searchURL)
+		r.saveHistory(engine+" "+query, "search", searchURL, 0, "", 0)
+	}
+}
+
+func (r *REPL) searchAISummary(query string) {
+	if !r.ollamaOK {
+		r.ollamaOK = r.ollama.CheckHealth()
+	}
+	if !r.ollamaOK {
+		fmt.Println("[nsh] Ollama not running — cannot generate summary.")
 		return
 	}
-	fmt.Printf("[nsh] Opened: %s\n", searchURL)
-	r.saveHistory(engine+" "+query, "search", searchURL, 0, "", 0)
+
+	ctx := context.Background()
+	fmt.Print("[nsh] thinking...")
+
+	prompt := fmt.Sprintf("Answer this question concisely in 3-5 sentences: %s", query)
+	answer, err := r.ollama.GenerateStream(ctx, prompt, "", func(token string) {})
+	fmt.Print("\r              \r")
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[nsh] AI error: %v\n", err)
+		return
+	}
+
+	fmt.Println("\033[36m" + answer + "\033[0m")
+	fmt.Println()
+	r.saveHistory("ask "+query, "ask", answer, 0, "", 0)
 }
 
 func (r *REPL) handleWorkflow(name string) {
@@ -751,8 +790,13 @@ Developed by Sanchit
 
 Usage:
   Type commands normally, or use plain English.
-  Prefix with google/search/wiki/yt/gh to search the web.
-  Unix commands (ls -ltr, grep, etc.) auto-route through WSL on Windows.
+  Built-in commands (ls, cat, grep, etc.) run natively — no shell needed.
+
+Search & AI:
+  google <query>              Open search in browser
+  ask <query>                 Get AI answer in terminal (via Ollama)
+  google! <query>             AI answer + open browser
+  wiki/yt/gh <query>          Search Wikipedia, YouTube, GitHub
 
 Built-in commands:
   nsh help                       Show this help

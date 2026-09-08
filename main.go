@@ -50,9 +50,11 @@ Getting started:
   Just run 'nsh' with no arguments to start the interactive shell.
   Type any shell command as you normally would, or use plain English:
 
-    $ ls -la                          (runs as a shell command)
+    $ ls -la                          (runs natively, instant)
     $ list files sorted by size       (translated via Ollama)
     $ google latest LLM news          (opens browser search)
+    $ ask what is kubernetes           (AI answer in terminal)
+    $ google! explain docker           (AI answer + open browser)
 
 Interactive commands:
   nsh help                  show full command reference

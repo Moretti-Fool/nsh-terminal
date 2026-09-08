@@ -56,7 +56,8 @@ func (c *Classifier) UpdateWorkflows(names []string) {
 }
 
 var searchPrefixes = map[string]bool{
-	"google": true, "search": true, "wiki": true, "yt": true, "gh": true,
+	"google": true, "google!": true, "search": true, "search!": true,
+	"wiki": true, "yt": true, "gh": true, "ask": true,
 }
 
 var nlSignals = []string{

@@ -114,10 +114,16 @@ Respond with just the name or NONE. Nothing else.`, strings.Join(workflows, ", "
 }
 
 func (c *Client) GenerateStream(ctx context.Context, input string, cwd string, onToken func(string)) (string, error) {
+	prompt := fmt.Sprintf("User wants to: %s", input)
+	system := c.BuildSystemPrompt(cwd)
+	if cwd == "" {
+		prompt = input
+		system = "You are a helpful assistant. Answer questions concisely and accurately."
+	}
 	body := generateRequest{
 		Model:  c.generationModel,
-		Prompt: fmt.Sprintf("User wants to: %s", input),
-		System: c.BuildSystemPrompt(cwd),
+		Prompt: prompt,
+		System: system,
 		Stream: true,
 	}
 	jsonBody, err := json.Marshal(body)
