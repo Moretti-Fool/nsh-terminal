@@ -39,6 +39,8 @@ type UIConfig struct {
 	Prompt               string `toml:"prompt"`
 	ShowGeneratedCommand bool   `toml:"show_generated_command"`
 	ConfirmDestructive   bool   `toml:"confirm_destructive"`
+	Theme                string `toml:"theme"`
+	ShowWelcome          bool   `toml:"show_welcome"`
 }
 
 type HistoryConfig struct {
@@ -57,7 +59,7 @@ func Default() Config {
 		},
 		Shell: ShellConfig{
 			Default:   "auto",
-			WSLDistro: "Ubuntu",
+			WSLDistro: "",
 		},
 		Search: SearchConfig{
 			DefaultEngine: "google",
@@ -74,6 +76,8 @@ func Default() Config {
 			Prompt:               "nsh> ",
 			ShowGeneratedCommand: true,
 			ConfirmDestructive:   true,
+			Theme:                "default",
+			ShowWelcome:          true,
 		},
 		History: HistoryConfig{
 			RetentionDays:      90,

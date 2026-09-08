@@ -56,10 +56,10 @@ func (e *Executor) resolveExplicit(name string) (string, []string) {
 	case "cmd":
 		return "cmd.exe", []string{"/C"}
 	case "wsl":
-		return "wsl.exe", []string{"-d", e.wslDistro, "--", "bash", "-c"}
+		return "wsl.exe", []string{"--", "bash", "-c"}
 	case "bash":
 		if runtime.GOOS == "windows" {
-			return "wsl.exe", []string{"-d", e.wslDistro, "--", "bash", "-c"}
+			return "wsl.exe", []string{"--", "bash", "-c"}
 		}
 		return "/bin/bash", []string{"-c"}
 	case "zsh":
@@ -149,7 +149,7 @@ func (e *Executor) NeedsWSL(command string) bool {
 }
 
 func (e *Executor) wslShell() (string, []string) {
-	return "wsl.exe", []string{"-d", e.wslDistro, "--", "bash", "-c"}
+	return "wsl.exe", []string{"--", "bash", "-c"}
 }
 
 func (e *Executor) Run(command string) (RunResult, error) {

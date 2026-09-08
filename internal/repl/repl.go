@@ -1,15 +1,16 @@
 package repl
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/chzyer/readline"
 	"github.com/nsh-terminal/nsh/internal/classifier"
 	"github.com/nsh-terminal/nsh/internal/config"
 	"github.com/nsh-terminal/nsh/internal/executor"
@@ -18,6 +19,8 @@ import (
 	"github.com/nsh-terminal/nsh/internal/search"
 	"github.com/nsh-terminal/nsh/internal/workflow"
 )
+
+const Version = "1.0.0"
 
 type REPL struct {
 	cfg        config.Config
@@ -68,36 +71,33 @@ func New(cfg config.Config) *REPL {
 }
 
 func (r *REPL) Run() error {
-	rl, err := readline.NewEx(&readline.Config{
-		Prompt:            r.currentPrompt(),
-		HistoryFile:       filepath.Join(config.Dir(), ".readline_history"),
-		InterruptPrompt:   "^C",
-		EOFPrompt:         "exit",
-		HistorySearchFold: true,
-	})
-	if err != nil {
-		return err
-	}
-	defer rl.Close()
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Buffer(make([]byte, 64*1024), 64*1024)
 
-	r.printWelcome()
-
-	for {
-		rl.SetPrompt(r.currentPrompt())
-		line, err := rl.Readline()
-		if err == readline.ErrInterrupt {
+	// Handle Ctrl+C gracefully
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	go func() {
+		for range sigCh {
 			if r.recording {
 				r.recording = false
 				r.recorded = nil
 				fmt.Println("\n[nsh] Recording cancelled.")
 			}
-			continue
+			fmt.Print("\n")
+			r.printPrompt()
 		}
-		if err != nil {
+	}()
+
+	r.printWelcome()
+
+	for {
+		r.printPrompt()
+		if !scanner.Scan() {
 			break
 		}
 
-		input := strings.TrimSpace(line)
+		input := strings.TrimSpace(scanner.Text())
 		if input == "" {
 			continue
 		}
@@ -110,22 +110,48 @@ func (r *REPL) Run() error {
 	return nil
 }
 
-func (r *REPL) currentPrompt() string {
+func (r *REPL) printPrompt() {
 	cwd, _ := os.Getwd()
 	home, _ := os.UserHomeDir()
 	display := cwd
 	if home != "" && strings.HasPrefix(cwd, home) {
 		display = "~" + cwd[len(home):]
 	}
+
+	theme := r.cfg.UI.Theme
+	cwdColor := "\033[32m"   // green
+	promptColor := "\033[0m" // reset
+	recColor := "\033[31m"   // red
+	reset := "\033[0m"
+
+	if theme == "minimal" {
+		cwdColor = ""
+		promptColor = ""
+		recColor = ""
+		reset = ""
+	} else if theme == "blue" {
+		cwdColor = "\033[34m"
+	} else if theme == "cyan" {
+		cwdColor = "\033[36m"
+	} else if theme == "yellow" {
+		cwdColor = "\033[33m"
+	} else if theme == "magenta" {
+		cwdColor = "\033[35m"
+	}
+
 	rec := ""
 	if r.recording {
-		rec = "\033[31m[REC]\033[0m "
+		rec = recColor + "[REC]" + reset + " "
 	}
-	return fmt.Sprintf("%s\033[32m%s\033[0m %s", rec, display, r.cfg.UI.Prompt)
+	fmt.Printf("%s%s%s%s %s", rec, cwdColor, display, reset, r.cfg.UI.Prompt)
+	_ = promptColor
 }
 
 func (r *REPL) printWelcome() {
-	fmt.Println("Welcome to nsh — the natural shell")
+	if !r.cfg.UI.ShowWelcome {
+		return
+	}
+	fmt.Printf("nsh v%s — the natural shell\n", Version)
 	fmt.Println("Type commands normally, or use plain English.")
 	if !r.ollamaOK {
 		fmt.Println("[nsh] Ollama unavailable — NL features disabled, commands still work.")
@@ -135,6 +161,15 @@ func (r *REPL) printWelcome() {
 }
 
 func (r *REPL) handleInput(input string) {
+	if input == "--help" || input == "-h" || input == "help" {
+		r.printHelp()
+		return
+	}
+	if input == "--version" || input == "-v" || input == "version" {
+		fmt.Printf("nsh v%s\n", Version)
+		return
+	}
+
 	r.classifier.UpdateWorkflows(r.workflows.Names())
 	result := r.classifier.Classify(input)
 
@@ -335,8 +370,10 @@ func (r *REPL) handleBuiltin(input string) {
 	args := parts[2:]
 
 	switch parts[1] {
-	case "help":
+	case "help", "--help", "-h":
 		r.printHelp()
+	case "version", "--version", "-v":
+		fmt.Printf("nsh v%s\n", Version)
 	case "record":
 		r.handleRecord(args)
 	case "save-last":
@@ -357,6 +394,8 @@ func (r *REPL) handleBuiltin(input string) {
 		r.handleListModels()
 	case "model":
 		r.handleSetModel(args)
+	case "theme":
+		r.handleTheme(args)
 	default:
 		fmt.Printf("[nsh] Unknown command: nsh %s\n", parts[1])
 		fmt.Println("Run \"nsh help\" for available commands.")
@@ -519,7 +558,6 @@ func (r *REPL) handleDeleteWorkflow(args []string) {
 
 func (r *REPL) handleHistory(args []string) {
 	now := time.Now()
-
 	if len(args) == 0 {
 		r.printDayHistory(now, "Today")
 		return
@@ -637,7 +675,6 @@ func (r *REPL) handleListModels() {
 	fmt.Printf("  Current classifier model:  %s\n", r.ollama.ClassifierModel())
 	fmt.Println()
 	fmt.Println("  Switch with: nsh model <name>")
-	fmt.Println("  Switch classifier: nsh model classifier <name>")
 }
 
 func (r *REPL) handleSetModel(args []string) {
@@ -649,7 +686,6 @@ func (r *REPL) handleSetModel(args []string) {
 		fmt.Printf("  Current classifier:  %s\n", r.ollama.ClassifierModel())
 		return
 	}
-
 	if args[0] == "classifier" {
 		if len(args) < 2 {
 			fmt.Println("[nsh] Usage: nsh model classifier <name>")
@@ -661,11 +697,29 @@ func (r *REPL) handleSetModel(args []string) {
 		fmt.Printf("[nsh] Classifier model set to: %s\n", args[1])
 		return
 	}
-
 	r.ollama.SetGenerationModel(args[0])
 	r.cfg.Ollama.GenerationModel = args[0]
 	config.Save(r.cfg, filepath.Join(config.Dir(), "config.toml"))
 	fmt.Printf("[nsh] Generation model set to: %s\n", args[0])
+}
+
+func (r *REPL) handleTheme(args []string) {
+	themes := []string{"default", "minimal", "blue", "cyan", "yellow", "magenta"}
+	if len(args) == 0 {
+		fmt.Println("[nsh] Available themes:")
+		for _, t := range themes {
+			marker := ""
+			if t == r.cfg.UI.Theme {
+				marker = " (active)"
+			}
+			fmt.Printf("  %s%s\n", t, marker)
+		}
+		fmt.Println("\n  Switch with: nsh theme <name>")
+		return
+	}
+	r.cfg.UI.Theme = args[0]
+	config.Save(r.cfg, filepath.Join(config.Dir(), "config.toml"))
+	fmt.Printf("[nsh] Theme set to: %s\n", args[0])
 }
 
 func (r *REPL) autoDetectModel() {
@@ -677,20 +731,13 @@ func (r *REPL) autoDetectModel() {
 		return
 	}
 
-	// Check if configured model exists
 	genModel := r.ollama.GenerationModel()
-	found := false
 	for _, m := range models {
 		if m.Name == genModel {
-			found = true
-			break
+			return
 		}
 	}
-	if found {
-		return
-	}
 
-	// Pick the first available model as fallback
 	fallback := models[0].Name
 	r.ollama.SetGenerationModel(fallback)
 	r.ollama.SetClassifierModel(fallback)
@@ -699,7 +746,8 @@ func (r *REPL) autoDetectModel() {
 }
 
 func (r *REPL) printHelp() {
-	fmt.Println(`nsh — the natural shell
+	fmt.Printf(`nsh v%s — the natural shell
+Developed by Sanchit
 
 Usage:
   Type commands normally, or use plain English.
@@ -708,9 +756,11 @@ Usage:
 
 Built-in commands:
   nsh help                       Show this help
+  nsh version                    Show version
   nsh models                     List available Ollama models
   nsh model <name>               Set generation model
   nsh model classifier <name>    Set classifier model
+  nsh theme <name>               Set color theme
   nsh record start               Start recording a workflow
   nsh record stop "name"         Stop recording and save as workflow
   nsh save-last N "name"         Save last N commands as a workflow
@@ -724,7 +774,8 @@ Built-in commands:
   nsh replay HH:MM               Show details of a command at that time
   nsh replay HH:MM --run         Re-execute that command
   nsh config                     Open config in your editor
-  exit / quit                    Exit nsh`)
+  exit / quit                    Exit nsh
+`, Version)
 }
 
 func (r *REPL) saveHistory(input, inputType, generated string, exitCode int, output string, durationMs int64) {
