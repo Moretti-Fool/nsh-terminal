@@ -1,0 +1,4 @@
+nsh
+nsh.exe
+dist/
+*.test
