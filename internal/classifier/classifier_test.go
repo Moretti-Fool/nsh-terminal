@@ -9,6 +9,7 @@ var testPathLookup = func(name string) bool {
 		"git": true, "docker": true, "ls": true, "cd": true,
 		"npm": true, "go": true, "python": true, "cat": true,
 		"mkdir": true, "rm": true, "curl": true, "ping": true,
+		"find": true, "sort": true, "kill": true,
 	}
 	return known[name]
 }
@@ -87,5 +88,50 @@ func TestClassifyWindowsPath(t *testing.T) {
 	c := New(nil, nil)
 	if r := c.Classify(`C:\Users\test\script.bat`); r.Type != Command {
 		t.Errorf("got %v, want Command", r.Type)
+	}
+}
+
+func TestClassifyAmbiguousNL(t *testing.T) {
+	c := New(testPathLookup, nil)
+	for _, input := range []string{
+		"find nsh design file",
+		"sort these items by name",
+		"kill all background tasks",
+	} {
+		r := c.Classify(input)
+		if r.Type == Command {
+			t.Errorf("Classify(%q) = Command, want Ambiguous or NL", input)
+		}
+	}
+}
+
+func TestClassifyRealCommandsStayCommand(t *testing.T) {
+	c := New(testPathLookup, nil)
+	for _, input := range []string{
+		"find . -name *.go",
+		"sort -n file.txt",
+		"kill -9 1234",
+		"git status",
+		"npm run dev",
+		"docker compose up",
+	} {
+		r := c.Classify(input)
+		if r.Type != Command {
+			t.Errorf("Classify(%q) = %v, want Command", input, r.Type)
+		}
+	}
+}
+
+func TestClassifySearchModes(t *testing.T) {
+	c := New(nil, nil)
+	for _, input := range []string{
+		"ask what is kubernetes",
+		"google! explain docker",
+		"search! latest golang news",
+	} {
+		r := c.Classify(input)
+		if r.Type != Search {
+			t.Errorf("Classify(%q) = %v, want Search", input, r.Type)
+		}
 	}
 }

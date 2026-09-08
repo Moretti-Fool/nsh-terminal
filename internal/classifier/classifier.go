@@ -107,12 +107,15 @@ func (c *Classifier) Classify(input string) Result {
 		return Result{Type: Command}
 	}
 
-	if c.pathLookup != nil && c.pathLookup(firstToken) {
-		return Result{Type: Command}
-	}
-
 	if hasNLSignals(lower) {
 		return Result{Type: NaturalLanguage}
+	}
+
+	if c.pathLookup != nil && c.pathLookup(firstToken) {
+		if len(tokens) >= 4 && allPlainWords(tokens[1:]) {
+			return Result{Type: Ambiguous}
+		}
+		return Result{Type: Command}
 	}
 
 	if looksLikeCommand(tokens) {
@@ -164,6 +167,28 @@ func looksLikeCommand(tokens []string) bool {
 		return true
 	}
 	return false
+}
+
+func allPlainWords(tokens []string) bool {
+	for _, t := range tokens {
+		if strings.HasPrefix(t, "-") || strings.HasPrefix(t, "/") || strings.HasPrefix(t, "\\") {
+			return false
+		}
+		if strings.ContainsAny(t, "./\\:=") {
+			return false
+		}
+		allDigit := true
+		for _, ch := range t {
+			if ch < '0' || ch > '9' {
+				allDigit = false
+				break
+			}
+		}
+		if allDigit && len(t) > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func hasNaturalLanguageStructure(lower string) bool {
