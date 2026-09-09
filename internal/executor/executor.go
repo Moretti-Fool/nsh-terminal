@@ -24,10 +24,169 @@ type Executor struct {
 	shellPref string
 	wslDistro string
 	pathCache sync.Map
+
+	psMu       sync.Mutex
+	ps         *psHost
+	psErr      error
+	psStarting bool
+	psWait     chan struct{}
 }
 
 func New(shellPref string, wslDistro string) *Executor {
 	return &Executor{shellPref: shellPref, wslDistro: wslDistro}
+}
+
+// WarmPSHost starts the persistent PowerShell process in the background so the
+// first NL command does not pay a 2–3s cold start.
+func (e *Executor) WarmPSHost() {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	go func() { _ = e.ensurePSHost() }()
+}
+
+func (e *Executor) Close() {
+	e.psMu.Lock()
+	h := e.ps
+	e.ps = nil
+	e.psMu.Unlock()
+	if h != nil {
+		_ = h.close()
+	}
+}
+
+func (e *Executor) ensurePSHost() error {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+
+	e.psMu.Lock()
+	if e.ps != nil && e.ps.ready {
+		e.psMu.Unlock()
+		return nil
+	}
+	if e.psStarting {
+		wait := e.psWait
+		e.psMu.Unlock()
+		<-wait
+		e.psMu.Lock()
+		err := e.psErr
+		e.psMu.Unlock()
+		return err
+	}
+	e.psStarting = true
+	e.psWait = make(chan struct{})
+	e.psMu.Unlock()
+
+	h, err := startPSHost()
+
+	e.psMu.Lock()
+	e.ps = h
+	e.psErr = err
+	e.psStarting = false
+	close(e.psWait)
+	e.psMu.Unlock()
+	return err
+}
+
+func (e *Executor) dropPSHost() {
+	e.psMu.Lock()
+	h := e.ps
+	e.ps = nil
+	e.psErr = nil
+	e.psMu.Unlock()
+	if h != nil {
+		_ = h.close()
+	}
+}
+
+// RunGenerated executes an LLM-produced command. On Windows this uses the
+// warm PowerShell host so cmdlets work and startup cost is paid once.
+func (e *Executor) RunGenerated(command string) (RunResult, error) {
+	if runtime.GOOS != "windows" {
+		return e.Run(command)
+	}
+	if err := e.ensurePSHost(); err != nil {
+		return e.runPowerShellOnce(command)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
+	e.psMu.Lock()
+	h := e.ps
+	e.psMu.Unlock()
+	if h == nil {
+		return e.runPowerShellOnce(command)
+	}
+	result, err := h.run(command, cwd)
+	if err != nil {
+		e.dropPSHost()
+		if retryErr := e.ensurePSHost(); retryErr == nil {
+			e.psMu.Lock()
+			h = e.ps
+			e.psMu.Unlock()
+			if h != nil {
+				return h.run(command, cwd)
+			}
+		}
+		return e.runPowerShellOnce(command)
+	}
+	return result, nil
+}
+
+func (e *Executor) runPowerShellOnce(command string) (RunResult, error) {
+	exe := "powershell.exe"
+	if p, err := e.CachedLookPath("pwsh"); err == nil {
+		exe = p
+	}
+	start := time.Now()
+	cmd := exec.Command(exe, "-NoProfile", "-NonInteractive", "-Command", command)
+	cmd.Env = os.Environ()
+	hideWindow(cmd)
+	var outBuf bytes.Buffer
+	cmd.Stdout = io.MultiWriter(os.Stdout, &outBuf)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &outBuf)
+	cmd.Stdin = os.Stdin
+	err := cmd.Run()
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+			err = nil
+		}
+	}
+	return RunResult{Output: outBuf.String(), ExitCode: exitCode, DurationMs: time.Since(start).Milliseconds()}, err
+}
+
+// NLShellName is the dialect the generator should target (PowerShell on Windows).
+func (e *Executor) NLShellName() string {
+	if runtime.GOOS == "windows" {
+		return "powershell"
+	}
+	return e.ShellName()
+}
+
+func (e *Executor) AvailableBins() []string {
+	candidates := []string{
+		"ipconfig", "netstat", "taskkill", "tasklist", "sc", "net",
+		"ping", "tracert", "nslookup", "curl", "git", "docker",
+		"npm", "node", "python", "python3", "pip", "ssh", "where",
+		"findstr", "robocopy", "xcopy", "msiexec", "wmic",
+		"powershell", "pwsh", "cmd", "winget", "choco",
+		"dotnet", "go", "cargo", "make", "kubectl",
+	}
+	var found []string
+	for _, name := range candidates {
+		if e.PathExists(name) {
+			found = append(found, name)
+		}
+	}
+	return found
+}
+
+func LooksLikeUnknownCommand(output string) bool {
+	return looksLikeUnknownCommand(output)
 }
 
 func (e *Executor) CachedLookPath(name string) (string, error) {
@@ -52,12 +211,18 @@ func (e *Executor) PathExists(name string) bool {
 }
 
 func (e *Executor) Run(command string) (RunResult, error) {
-	if result, handled := e.TryBuiltin(command); handled {
-		return result, nil
+	if runtime.GOOS == "windows" && looksLikePowerShell(command) {
+		return e.RunGenerated(command)
 	}
 
+	// Commands with pipes, redirects, or globs need a real shell —
+	// builtins can't handle these, so check before TryBuiltin.
 	if needsShell(command) {
 		return e.runViaShell(command)
+	}
+
+	if result, handled := e.TryBuiltin(command); handled {
+		return result, nil
 	}
 
 	return e.runDirect(command)
@@ -212,6 +377,20 @@ func (e *Executor) DetectShell() (string, []string) {
 		shell = "/bin/sh"
 	}
 	return shell, []string{"-c"}
+}
+
+func (e *Executor) ShellName() string {
+	shell, _ := e.DetectShell()
+	base := strings.ToLower(filepath.Base(shell))
+	base = strings.TrimSuffix(base, ".exe")
+	switch base {
+	case "powershell", "pwsh":
+		return "powershell"
+	case "wsl":
+		return "bash"
+	default:
+		return base
+	}
 }
 
 func (e *Executor) resolveExplicit(name string) (string, []string) {

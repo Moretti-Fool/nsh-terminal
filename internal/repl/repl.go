@@ -52,6 +52,9 @@ func New(cfg config.Config) *REPL {
 	)
 
 	exec := executor.New(cfg.Shell.Default, cfg.Shell.WSLDistro)
+	exec.WarmPSHost()
+	ollamaClient.SetShellHint(exec.NLShellName())
+	ollamaClient.SetAvailableBins(exec.AvailableBins())
 	pathLookup := func(name string) bool {
 		return exec.PathExists(name)
 	}
@@ -89,6 +92,8 @@ func (r *REPL) Run() error {
 			r.printPrompt()
 		}
 	}()
+
+	defer r.executor.Close()
 
 	r.printWelcome()
 
@@ -269,6 +274,16 @@ func (r *REPL) handleNL(input string) {
 		fmt.Println("[nsh] No command generated.")
 		return
 	}
+	if ollama.LooksLikeBinDump(generated) {
+		fmt.Print("[nsh] retrying...")
+		repaired, rerr := r.ollama.RepairCommand(ctx, input, cwd, generated, "Do not list binaries. Emit one PowerShell command for the user's request.")
+		fmt.Print("\r                 \r")
+		if rerr != nil || repaired == "" || ollama.LooksLikeBinDump(repaired) {
+			fmt.Println("[nsh] Could not translate that request into a command.")
+			return
+		}
+		generated = repaired
+	}
 
 	if r.cfg.UI.ShowGeneratedCommand {
 		fmt.Printf("\033[36m> %s\033[0m\n", generated)
@@ -284,39 +299,107 @@ func (r *REPL) handleNL(input string) {
 		}
 	}
 
+	ok, result := r.runGeneratedCommands(generated)
+	if ok {
+		r.recordGenerated(generated)
+		r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
+		return
+	}
+
+	if executor.LooksLikeUnknownCommand(result.Output) || result.ExitCode != 0 {
+		fmt.Print("[nsh] retrying...")
+		repaired, rerr := r.ollama.RepairCommand(ctx, input, cwd, generated, result.Output)
+		fmt.Print("\r                 \r")
+		if rerr != nil || repaired == "" || repaired == generated {
+			r.recordGenerated(generated)
+			r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
+			return
+		}
+		if r.cfg.UI.ShowGeneratedCommand {
+			fmt.Printf("\033[36m> %s\033[0m\n", repaired)
+		}
+		if r.cfg.UI.ConfirmDestructive && r.executor.IsDestructive(repaired) {
+			fmt.Print("[nsh] This looks destructive. Run it? [y/N] ")
+			var confirm string
+			fmt.Scanln(&confirm)
+			if strings.ToLower(strings.TrimSpace(confirm)) != "y" {
+				fmt.Println("[nsh] Cancelled.")
+				return
+			}
+		}
+		_, result = r.runGeneratedCommands(repaired)
+		r.recordGenerated(repaired)
+		r.saveHistory(input, "nl", repaired, result.ExitCode, result.Output, result.DurationMs)
+		return
+	}
+
+	r.recordGenerated(generated)
+	r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
+}
+
+func (r *REPL) recordGenerated(generated string) {
 	if r.recording {
 		r.recorded = append(r.recorded, generated)
 	}
+}
 
+func (r *REPL) runGeneratedCommands(generated string) (bool, executor.RunResult) {
+	var last executor.RunResult
 	commands := strings.Split(generated, "\n")
+	ran := false
 	for _, cmd := range commands {
 		cmd = strings.TrimSpace(cmd)
 		if cmd == "" {
 			continue
 		}
-		if strings.HasPrefix(cmd, "cd ") {
-			dir := strings.TrimSpace(strings.TrimPrefix(cmd, "cd "))
+		if dir, ok := parseGeneratedCd(cmd); ok {
 			expanded, err := executor.CdExpand(dir)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "[nsh] %v\n", err)
-				r.saveHistory(input, "nl", generated, 1, "", 0)
-				return
+				return false, executor.RunResult{ExitCode: 1, Output: err.Error()}
 			}
 			os.Chdir(expanded)
+			ran = true
 			continue
 		}
-		result, err := r.executor.Run(cmd)
+		result, err := r.executor.RunGenerated(cmd)
+		last = result
+		ran = true
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[nsh] execution error: %v\n", err)
-			r.saveHistory(input, "nl", generated, 1, "", 0)
-			return
+			last.ExitCode = 1
+			if last.Output == "" {
+				last.Output = err.Error()
+			}
+			return false, last
 		}
 		if result.ExitCode != 0 {
-			r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
-			return
+			return false, result
 		}
-		r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
 	}
+	if !ran {
+		return true, executor.RunResult{}
+	}
+	return last.ExitCode == 0, last
+}
+
+func parseGeneratedCd(cmd string) (string, bool) {
+	trim := strings.TrimSpace(cmd)
+	lower := strings.ToLower(trim)
+	prefixes := []string{"cd ", "chdir ", "set-location "}
+	for _, p := range prefixes {
+		if strings.HasPrefix(lower, p) {
+			rest := strings.TrimSpace(trim[len(p):])
+			rest = strings.TrimPrefix(rest, "-Path ")
+			rest = strings.TrimPrefix(rest, "-LiteralPath ")
+			rest = strings.Trim(rest, `"'`)
+			if rest == "" || strings.HasPrefix(rest, "-") {
+				return "", false
+			}
+			return rest, true
+		}
+	}
+	return "", false
 }
 
 func (r *REPL) handleSearch(engine, query string) {

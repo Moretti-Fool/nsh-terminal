@@ -14,7 +14,7 @@ A cross-platform terminal that understands both shell commands and natural langu
 - **Parallel Service Launcher** — Define your dev stack in a workflow file and launch everything with `nsh up`. Color-coded log streaming, one-command shutdown with `nsh down`.
 - **Workflow Recording & Replay** — Record a sequence of commands, save it with a name, and replay it anytime. Ctrl+C interrupts the current command without cancelling the recording.
 - **AI Search & Answers** — `ask what is kubernetes` gets an AI answer in the terminal. `google! <query>` gives both an AI answer and opens the browser.
-- **Cross-Platform** — Works on Windows, macOS, and Linux. On Windows, uses `cmd.exe` for shell fallback (50ms vs 2-3s PowerShell startup).
+- **Cross-Platform** — Works on Windows, macOS, and Linux. On Windows, typed commands still use fast builtins/`cmd.exe`; natural language runs through a warm PowerShell host so cmdlets work without a 2–3s cold start per command.
 - **Structured History** — Browse command history by day, search across days, replay past commands.
 - **Destructive Command Safety** — Detects dangerous commands (`rm -rf`, `DROP TABLE`, etc.) and asks for confirmation.
 - **Graceful Degradation** — Works as a normal shell even when Ollama isn't running. NL features simply become unavailable.
@@ -258,9 +258,12 @@ Switch themes: `nsh theme cyan`
 
 ```
 Input → Go-native builtin? → Run in-process (0ms overhead)
+      → PowerShell cmdlet? → warm PowerShell host (~50–150ms after one cold start)
       → Binary in PATH?    → exec directly (no shell, ~50ms)
       → Needs pipes/globs? → cmd.exe /C fallback (~50ms)
 ```
+
+Natural language is translated to **PowerShell** on Windows. A persistent `powershell.exe -NoProfile` process is started when nsh opens, so cmdlet-heavy NL commands do not pay a 2–3s startup on every request. Typed Unix-style commands (`ls`, `git`, …) still use builtins / direct exec.
 
 ### Input Classification
 
@@ -297,6 +300,7 @@ nsh (single Go binary, ~7MB)
     config/            - TOML config management
     executor/          - 3-tier execution pipeline + Go-native builtins
       builtins.go      - ls, cat, grep, find, cp, mv, rm, head, tail, etc.
+      pshost.go        - Persistent PowerShell host for NL/cmdlets (Windows)
       services.go      - Parallel service launcher (nsh up/down/status)
     history/           - JSONL per-day history with search
     ollama/            - Ollama REST API client (command gen, Python gen, classify)
