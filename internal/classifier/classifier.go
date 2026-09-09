@@ -71,6 +71,8 @@ var nlSignals = []string{
 	"install", "update all", "upgrade",
 	"tell me", "give me", "can you", "please",
 	"i want", "i need",
+	"in which", "which file", "which files",
+	"mentioned", "mentions", "contains the",
 }
 
 func (c *Classifier) Classify(input string) Result {
@@ -204,6 +206,9 @@ func hasNaturalLanguageStructure(lower string) bool {
 		if words[0] == q {
 			return true
 		}
+	}
+	if len(words) >= 2 && words[1] == "which" {
+		return true
 	}
 	for _, art := range []string{"the ", "a ", "an ", "all ", "my ", "this ", "that "} {
 		if strings.Contains(lower, art) {

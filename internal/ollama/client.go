@@ -63,6 +63,7 @@ func (c *Client) BuildSystemPrompt(cwd string) string {
 		shellNote = `
 Use PowerShell syntax (cmdlets, pipelines, $_).
 Prefer Get-ChildItem, Sort-Object, Select-Object, Get-Process, Get-Service, Get-NetTCPConnection, Restart-Service.
+To search file contents, use Get-ChildItem -Recurse -File | Select-String -Pattern 'text' — do not Get-Content a guessed filename.
 Do not use cmd.exe switches such as dir /b, dir /w, dir /o-s — those are not PowerShell.
 Native binaries listed after Available: may be called when needed — never print that list.
 Output at most 3 commands. No Out-GridView, Read-Host, pause, more, or other interactive UI.`

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chzyer/readline"
 	"github.com/nsh-terminal/nsh/internal/classifier"
 	"github.com/nsh-terminal/nsh/internal/config"
 	"github.com/nsh-terminal/nsh/internal/executor"
@@ -78,6 +79,50 @@ func New(cfg config.Config) *REPL {
 }
 
 func (r *REPL) Run() error {
+	defer r.executor.Close()
+	r.printWelcome()
+
+	if readline.DefaultIsTerminal() {
+		return r.runReadline()
+	}
+	return r.runScanner()
+}
+
+func (r *REPL) runReadline() error {
+	rl, err := readline.NewEx(&readline.Config{
+		Prompt:          r.promptString(),
+		HistoryFile:     filepath.Join(config.Dir(), "input.hist"),
+		AutoComplete:    nshCompleter{},
+		InterruptPrompt: "^C",
+		EOFPrompt:       "exit",
+	})
+	if err != nil {
+		return r.runScanner()
+	}
+	defer rl.Close()
+
+	for {
+		rl.SetPrompt(r.promptString())
+		line, err := rl.Readline()
+		if err == readline.ErrInterrupt {
+			continue
+		}
+		if err != nil {
+			break
+		}
+		input := strings.TrimSpace(line)
+		if input == "" {
+			continue
+		}
+		if input == "exit" || input == "quit" {
+			break
+		}
+		r.handleInput(input)
+	}
+	return nil
+}
+
+func (r *REPL) runScanner() error {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 64*1024), 64*1024)
 
@@ -92,10 +137,6 @@ func (r *REPL) Run() error {
 			r.printPrompt()
 		}
 	}()
-
-	defer r.executor.Close()
-
-	r.printWelcome()
 
 	for {
 		r.printPrompt()
@@ -121,7 +162,7 @@ func (r *REPL) Run() error {
 	return nil
 }
 
-func (r *REPL) printPrompt() {
+func (r *REPL) promptString() string {
 	cwd, _ := os.Getwd()
 	home, _ := os.UserHomeDir()
 	display := cwd
@@ -130,14 +171,12 @@ func (r *REPL) printPrompt() {
 	}
 
 	theme := r.cfg.UI.Theme
-	cwdColor := "\033[32m"   // green
-	promptColor := "\033[0m" // reset
-	recColor := "\033[31m"   // red
+	cwdColor := "\033[32m"
+	recColor := "\033[31m"
 	reset := "\033[0m"
 
 	if theme == "minimal" {
 		cwdColor = ""
-		promptColor = ""
 		recColor = ""
 		reset = ""
 	} else if theme == "blue" {
@@ -154,8 +193,11 @@ func (r *REPL) printPrompt() {
 	if r.recording {
 		rec = recColor + "[REC]" + reset + " "
 	}
-	fmt.Printf("%s%s%s%s %s", rec, cwdColor, display, reset, r.cfg.UI.Prompt)
-	_ = promptColor
+	return fmt.Sprintf("%s%s%s%s %s", rec, cwdColor, display, reset, r.cfg.UI.Prompt)
+}
+
+func (r *REPL) printPrompt() {
+	fmt.Print(r.promptString())
 }
 
 func (r *REPL) printWelcome() {
@@ -247,6 +289,20 @@ func (r *REPL) handleCommand(input string) {
 func (r *REPL) handleNL(input string) {
 	if scratch.LooksLikePython(input) && r.scratch.Available() {
 		r.handleScratchRun(input)
+		return
+	}
+
+	if looksLikeContentSearch(input) {
+		result, err := r.executor.Run("find " + input)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[nsh] execution error: %v\n", err)
+			return
+		}
+		preview := result.Output
+		if len(preview) > r.cfg.History.OutputPreviewChars {
+			preview = preview[:r.cfg.History.OutputPreviewChars]
+		}
+		r.saveHistory(input, "nl", "find "+input, result.ExitCode, preview, result.DurationMs)
 		return
 	}
 
@@ -400,6 +456,19 @@ func parseGeneratedCd(cmd string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func looksLikeContentSearch(input string) bool {
+	lower := strings.ToLower(input)
+	for _, w := range []string{
+		"mentioned", "mentions", "which file", "which files",
+		"in which", "containing",
+	} {
+		if strings.Contains(lower, w) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *REPL) handleSearch(engine, query string) {
@@ -1154,6 +1223,7 @@ Developed by Sanchit
 
 Usage:
   Type commands normally, or use plain English.
+  Tab completes paths, builtins, and nsh subcommands.
   Built-in commands (ls, cat, grep, find, etc.) run natively — no shell needed.
   Mention a Python library (pandas, matplotlib, etc.) and nsh auto-generates
   a script, installs deps, and runs it.
