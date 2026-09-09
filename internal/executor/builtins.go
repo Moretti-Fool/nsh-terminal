@@ -849,16 +849,72 @@ func builtinFind(tokens []string) (RunResult, bool) {
 	return RunResult{Output: buf.String(), DurationMs: time.Since(start).Milliseconds()}, true
 }
 
+func highlightKeywords(line string, lowerKeywords []string) string {
+	const red = "\033[1;31m"
+	const reset = "\033[0m"
+
+	result := line
+	lowerResult := strings.ToLower(result)
+	for _, kw := range lowerKeywords {
+		var highlighted strings.Builder
+		pos := 0
+		tmp := lowerResult
+		for {
+			idx := strings.Index(tmp[pos:], kw)
+			if idx < 0 {
+				highlighted.WriteString(result[pos:])
+				break
+			}
+			idx += pos
+			highlighted.WriteString(result[pos:idx])
+			highlighted.WriteString(red)
+			highlighted.WriteString(result[idx : idx+len(kw)])
+			highlighted.WriteString(reset)
+			pos = idx + len(kw)
+		}
+		result = highlighted.String()
+		lowerResult = strings.ToLower(stripANSI(result))
+	}
+	return result
+}
+
+func stripANSI(s string) string {
+	var out strings.Builder
+	i := 0
+	for i < len(s) {
+		if s[i] == '\033' && i+1 < len(s) && s[i+1] == '[' {
+			j := i + 2
+			for j < len(s) && !((s[j] >= 'A' && s[j] <= 'Z') || (s[j] >= 'a' && s[j] <= 'z')) {
+				j++
+			}
+			if j < len(s) {
+				j++
+			}
+			i = j
+			continue
+		}
+		out.WriteByte(s[i])
+		i++
+	}
+	return out.String()
+}
+
 func builtinFindContent(dir string, keywords []string, start time.Time) (RunResult, bool) {
+	const cyanBold = "\033[1;36m"
+	const green = "\033[32m"
+	const reset = "\033[0m"
+
 	var buf strings.Builder
 	count := 0
 	maxResults := 50
-	maxFileSize := int64(1024 * 1024) // skip files > 1MB
+	maxFileSize := int64(1024 * 1024)
 
 	lowerKeywords := make([]string, len(keywords))
 	for i, kw := range keywords {
 		lowerKeywords[i] = strings.ToLower(kw)
 	}
+
+	lastFile := ""
 
 	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -908,9 +964,21 @@ func builtinFindContent(dir string, keywords []string, start time.Time) (RunResu
 				}
 			}
 			if allFound {
-				out := fmt.Sprintf("%s:%d: %s\n", path, lineNum, line)
-				fmt.Print(out)
-				buf.WriteString(out)
+				if path != lastFile {
+					if lastFile != "" {
+						fmt.Println()
+						buf.WriteString("\n")
+					}
+					header := fmt.Sprintf("%s%s%s\n", cyanBold, path, reset)
+					fmt.Print(header)
+					buf.WriteString(path + "\n")
+					lastFile = path
+				}
+				highlighted := highlightKeywords(line, lowerKeywords)
+				colorLine := fmt.Sprintf("  %s%d%s: %s\n", green, lineNum, reset, highlighted)
+				plainLine := fmt.Sprintf("  %d: %s\n", lineNum, line)
+				fmt.Print(colorLine)
+				buf.WriteString(plainLine)
 				count++
 			}
 		}
@@ -921,10 +989,17 @@ func builtinFindContent(dir string, keywords []string, start time.Time) (RunResu
 		msg := fmt.Sprintf("find: no content matching %q found\n", strings.Join(keywords, " "))
 		fmt.Print(msg)
 		buf.WriteString(msg)
-	} else if count >= maxResults {
-		msg := fmt.Sprintf("... (%d results shown, more may exist)\n", maxResults)
-		fmt.Print(msg)
-		buf.WriteString(msg)
+	} else {
+		fmt.Println()
+		buf.WriteString("\n")
+		summary := fmt.Sprintf("%s%d match(es)%s\n", green, count, reset)
+		fmt.Print(summary)
+		buf.WriteString(fmt.Sprintf("%d match(es)\n", count))
+		if count >= maxResults {
+			msg := fmt.Sprintf("... (capped at %d results, more may exist)\n", maxResults)
+			fmt.Print(msg)
+			buf.WriteString(msg)
+		}
 	}
 
 	return RunResult{Output: buf.String(), DurationMs: time.Since(start).Milliseconds()}, true
