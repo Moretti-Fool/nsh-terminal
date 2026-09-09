@@ -113,6 +113,33 @@ Respond with just the name or NONE. Nothing else.`, strings.Join(workflows, ", "
 	return "", nil
 }
 
+func (c *Client) GeneratePython(ctx context.Context, input string, cwd string) (string, error) {
+	system := fmt.Sprintf(`You are nsh, a Python script generator.
+Generate a complete, runnable Python script for the user's request.
+Include all necessary imports at the top.
+Output ONLY the Python code. No explanations. No markdown. No code fences.
+If the script works with files, use paths relative to the current directory.
+CWD: %s`, cwd)
+
+	resp, err := c.doGenerate(ctx, generateRequest{
+		Model:  c.generationModel,
+		Prompt: fmt.Sprintf("Write a Python script to: %s", input),
+		System: system,
+		Stream: false,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	script := strings.TrimSpace(resp.Response)
+	script = strings.TrimPrefix(script, "```python\n")
+	script = strings.TrimPrefix(script, "```py\n")
+	script = strings.TrimPrefix(script, "```\n")
+	script = strings.TrimSuffix(script, "\n```")
+	script = strings.TrimSuffix(script, "```")
+	return strings.TrimSpace(script), nil
+}
+
 func (c *Client) GenerateStream(ctx context.Context, input string, cwd string, onToken func(string)) (string, error) {
 	prompt := fmt.Sprintf("User wants to: %s", input)
 	system := c.BuildSystemPrompt(cwd)

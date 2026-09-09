@@ -14,6 +14,12 @@ type Config struct {
 	Search  SearchConfig  `toml:"search"`
 	UI      UIConfig      `toml:"ui"`
 	History HistoryConfig `toml:"history"`
+	Scratch ScratchConfig `toml:"scratch"`
+}
+
+type ScratchConfig struct {
+	Dir    string `toml:"dir"`
+	Python string `toml:"python"`
 }
 
 type OllamaConfig struct {
@@ -83,6 +89,10 @@ func Default() Config {
 			RetentionDays:      90,
 			CaptureOutput:      true,
 			OutputPreviewChars: 500,
+		},
+		Scratch: ScratchConfig{
+			Dir:    "",
+			Python: "",
 		},
 	}
 }

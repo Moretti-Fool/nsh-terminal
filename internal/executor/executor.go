@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,10 +23,32 @@ type RunResult struct {
 type Executor struct {
 	shellPref string
 	wslDistro string
+	pathCache sync.Map
 }
 
 func New(shellPref string, wslDistro string) *Executor {
 	return &Executor{shellPref: shellPref, wslDistro: wslDistro}
+}
+
+func (e *Executor) CachedLookPath(name string) (string, error) {
+	if v, ok := e.pathCache.Load(name); ok {
+		if v == nil {
+			return "", exec.ErrNotFound
+		}
+		return v.(string), nil
+	}
+	p, err := exec.LookPath(name)
+	if err != nil {
+		e.pathCache.Store(name, nil)
+		return "", err
+	}
+	e.pathCache.Store(name, p)
+	return p, nil
+}
+
+func (e *Executor) PathExists(name string) bool {
+	_, err := e.CachedLookPath(name)
+	return err == nil
 }
 
 func (e *Executor) Run(command string) (RunResult, error) {
@@ -85,6 +108,10 @@ func (e *Executor) TryBuiltin(command string) (RunResult, bool) {
 		if len(tokens) == 1 {
 			return builtinClear()
 		}
+	case "which", "where":
+		if len(tokens) >= 2 {
+			return e.builtinWhich(tokens)
+		}
 	}
 	return RunResult{}, false
 }
@@ -118,7 +145,7 @@ func (e *Executor) runDirect(command string) (RunResult, error) {
 		return RunResult{}, nil
 	}
 
-	binary, err := exec.LookPath(tokens[0])
+	binary, err := e.CachedLookPath(tokens[0])
 	if err != nil {
 		return e.runViaShell(command)
 	}
@@ -293,6 +320,26 @@ func builtinPwd() (RunResult, bool) {
 func builtinClear() (RunResult, bool) {
 	fmt.Print("\033[2J\033[H")
 	return RunResult{}, true
+}
+
+func (e *Executor) builtinWhich(tokens []string) (RunResult, bool) {
+	start := time.Now()
+	var buf strings.Builder
+	exitCode := 0
+	for _, name := range tokens[1:] {
+		p, err := e.CachedLookPath(name)
+		if err != nil {
+			msg := fmt.Sprintf("%s: not found\n", name)
+			fmt.Print(msg)
+			buf.WriteString(msg)
+			exitCode = 1
+		} else {
+			line := p + "\n"
+			fmt.Print(line)
+			buf.WriteString(line)
+		}
+	}
+	return RunResult{Output: buf.String(), ExitCode: exitCode, DurationMs: time.Since(start).Milliseconds()}, true
 }
 
 func tokenize(command string) []string {

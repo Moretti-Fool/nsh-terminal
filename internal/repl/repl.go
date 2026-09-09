@@ -16,6 +16,7 @@ import (
 	"github.com/nsh-terminal/nsh/internal/executor"
 	"github.com/nsh-terminal/nsh/internal/history"
 	"github.com/nsh-terminal/nsh/internal/ollama"
+	"github.com/nsh-terminal/nsh/internal/scratch"
 	"github.com/nsh-terminal/nsh/internal/search"
 	"github.com/nsh-terminal/nsh/internal/workflow"
 )
@@ -30,6 +31,7 @@ type REPL struct {
 	history    *history.History
 	workflows  *workflow.Manager
 	search     *search.Handler
+	scratch    *scratch.Runner
 	recording  bool
 	recorded   []string
 	ollamaOK   bool
@@ -49,9 +51,9 @@ func New(cfg config.Config) *REPL {
 		time.Duration(cfg.Ollama.TimeoutMs)*time.Millisecond,
 	)
 
+	exec := executor.New(cfg.Shell.Default, cfg.Shell.WSLDistro)
 	pathLookup := func(name string) bool {
-		_, err := exec.LookPath(name)
-		return err == nil
+		return exec.PathExists(name)
 	}
 
 	hist := history.New(histDir, cfg.History.OutputPreviewChars)
@@ -60,11 +62,12 @@ func New(cfg config.Config) *REPL {
 	r := &REPL{
 		cfg:        cfg,
 		classifier: classifier.New(pathLookup, wfMgr.Names()),
-		executor:   executor.New(cfg.Shell.Default, cfg.Shell.WSLDistro),
+		executor:   exec,
 		ollama:     ollamaClient,
 		history:    hist,
 		workflows:  wfMgr,
 		search:     search.New(cfg.Search.Engines, cfg.Search.DefaultEngine),
+		scratch:    scratch.NewRunner(cfg.Scratch.Dir, cfg.Scratch.Python),
 		ollamaOK:   ollamaClient.CheckHealth(),
 	}
 	r.autoDetectModel()
@@ -235,6 +238,11 @@ func (r *REPL) handleCommand(input string) {
 }
 
 func (r *REPL) handleNL(input string) {
+	if scratch.LooksLikePython(input) && r.scratch.Available() {
+		r.handleScratchRun(input)
+		return
+	}
+
 	if !r.ollamaOK {
 		r.ollamaOK = r.ollama.CheckHealth()
 	}
@@ -358,6 +366,48 @@ func (r *REPL) searchAISummary(query string) {
 	r.saveHistory("ask "+query, "ask", answer, 0, "", 0)
 }
 
+func (r *REPL) handleScratchRun(input string) {
+	if !r.scratch.Available() {
+		fmt.Println("[nsh] Python not found. Install Python to use this feature.")
+		return
+	}
+
+	if !r.ollamaOK {
+		r.ollamaOK = r.ollama.CheckHealth()
+	}
+	if !r.ollamaOK {
+		fmt.Println("[nsh] Ollama not running — cannot generate Python script.")
+		fmt.Println("      Try: ollama serve")
+		return
+	}
+
+	cwd, _ := os.Getwd()
+	ctx := context.Background()
+
+	fmt.Print("[nsh] generating script...")
+	script, err := r.ollama.GeneratePython(ctx, input, cwd)
+	fmt.Print("\r                          \r")
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[nsh] Ollama error: %v\n", err)
+		return
+	}
+	if script == "" {
+		fmt.Println("[nsh] No script generated.")
+		return
+	}
+
+	fmt.Println("\033[36m--- generated script ---\033[0m")
+	fmt.Println(script)
+	fmt.Println("\033[36m------------------------\033[0m")
+
+	if err := r.scratch.Run(input, script); err != nil {
+		fmt.Fprintf(os.Stderr, "[nsh] script error: %v\n", err)
+	}
+
+	r.saveHistory(input, "scratch", script, 0, "", 0)
+}
+
 func (r *REPL) handleWorkflow(name string) {
 	wf, err := r.workflows.Load(name)
 	if err != nil {
@@ -447,6 +497,21 @@ func (r *REPL) handleBuiltin(input string) {
 		r.handleDown()
 	case "status":
 		r.handleStatus()
+	case "run":
+		if len(args) == 0 {
+			fmt.Println("[nsh] Usage: nsh run <description>")
+			fmt.Println("      Generates and runs a Python script from your description.")
+			fmt.Println()
+			fmt.Println("  Examples:")
+			fmt.Println(`    nsh run open sales.csv with pandas`)
+			fmt.Println(`    nsh run plot monthly revenue from data.csv`)
+			fmt.Println(`    nsh run merge all xlsx files in this folder`)
+			return
+		}
+		r.handleScratchRun(strings.Join(args, " "))
+	case "scratch":
+		fmt.Printf("[nsh] Scratch directory: %s\n", r.scratch.ScriptsDir())
+		fmt.Println("      Generated Python scripts are saved here.")
 	default:
 		fmt.Printf("[nsh] Unknown command: nsh %s\n", parts[1])
 		fmt.Println("Run \"nsh help\" for available commands.")
@@ -899,13 +964,20 @@ Developed by Sanchit
 
 Usage:
   Type commands normally, or use plain English.
-  Built-in commands (ls, cat, grep, etc.) run natively — no shell needed.
+  Built-in commands (ls, cat, grep, find, etc.) run natively — no shell needed.
+  Mention a Python library (pandas, matplotlib, etc.) and nsh auto-generates
+  a script, installs deps, and runs it.
 
 Search & AI:
   google <query>              Open search in browser
   ask <query>                 Get AI answer in terminal (via Ollama)
   google! <query>             AI answer + open browser
   wiki/yt/gh <query>          Search Wikipedia, YouTube, GitHub
+
+Python scratch workspace:
+  nsh run <description>          Generate and run a Python script
+  nsh scratch                    Show scratch directory location
+  "open sales.csv with pandas"   Auto-detected — generates script, installs deps, runs it
 
 Built-in commands:
   nsh help                       Show this help
