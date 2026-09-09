@@ -71,8 +71,6 @@ var nlSignals = []string{
 	"install", "update all", "upgrade",
 	"tell me", "give me", "can you", "please",
 	"i want", "i need",
-	"in which", "which file", "which files",
-	"mentioned", "mentions", "contains the",
 }
 
 func (c *Classifier) Classify(input string) Result {
@@ -125,6 +123,12 @@ func (c *Classifier) Classify(input string) Result {
 
 	if looksLikeCommand(tokens) {
 		return Result{Type: Command}
+	}
+
+	// Unknown first word and no flags: this is English, not a program invocation.
+	// Do not grow nlSignals for every phrasing — the LLM translator handles the rest.
+	if len(tokens) >= 3 && (c.pathLookup == nil || !c.pathLookup(firstToken)) {
+		return Result{Type: NaturalLanguage}
 	}
 
 	if hasNaturalLanguageStructure(lower) {
@@ -206,9 +210,6 @@ func hasNaturalLanguageStructure(lower string) bool {
 		if words[0] == q {
 			return true
 		}
-	}
-	if len(words) >= 2 && words[1] == "which" {
-		return true
 	}
 	for _, art := range []string{"the ", "a ", "an ", "all ", "my ", "this ", "that "} {
 		if strings.Contains(lower, art) {

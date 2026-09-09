@@ -45,12 +45,3 @@ func TestCompleterLocalFile(t *testing.T) {
 		t.Fatalf("expected complete.go remainder, got %q", cands)
 	}
 }
-
-func TestLooksLikeContentSearch(t *testing.T) {
-	if !looksLikeContentSearch("in which file workflows is mentioned") {
-		t.Fatal("expected content search")
-	}
-	if looksLikeContentSearch("list files sorted by size") {
-		t.Fatal("not a content search")
-	}
-}

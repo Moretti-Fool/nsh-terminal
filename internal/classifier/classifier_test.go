@@ -39,6 +39,7 @@ func TestClassifyNL(t *testing.T) {
 		"compress this folder into a zip",
 		"in which file workflows is mentioned",
 		"can you tell me in which files, workflows is mentioned",
+		"largest file in this folder",
 	} {
 		if r := c.Classify(input); r.Type != NaturalLanguage {
 			t.Errorf("Classify(%q) = %v, want NL", input, r.Type)

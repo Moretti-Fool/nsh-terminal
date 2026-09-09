@@ -180,8 +180,9 @@ func (c *Client) ClassifyInput(ctx context.Context, input string) (string, error
 		Model:  c.classifierModel,
 		Prompt: input,
 		System: `Classify the following input as one of: COMMAND, NL
-COMMAND = a direct shell command the user wants to run as-is
-NL = natural language describing what the user wants to do
+COMMAND = the user is invoking a program or builtin (first word is the executable), e.g. git status, ls -la, docker ps
+NL = English describing a goal or asking a question, even if it does not use words like "please" or "show me"
+If the first word is not a real command, classify as NL.
 Respond with exactly one word: COMMAND or NL. Nothing else.`,
 		Stream: false,
 	})

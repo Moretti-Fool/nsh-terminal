@@ -292,20 +292,6 @@ func (r *REPL) handleNL(input string) {
 		return
 	}
 
-	if looksLikeContentSearch(input) {
-		result, err := r.executor.Run("find " + input)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[nsh] execution error: %v\n", err)
-			return
-		}
-		preview := result.Output
-		if len(preview) > r.cfg.History.OutputPreviewChars {
-			preview = preview[:r.cfg.History.OutputPreviewChars]
-		}
-		r.saveHistory(input, "nl", "find "+input, result.ExitCode, preview, result.DurationMs)
-		return
-	}
-
 	if !r.ollamaOK {
 		r.ollamaOK = r.ollama.CheckHealth()
 	}
@@ -456,19 +442,6 @@ func parseGeneratedCd(cmd string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-func looksLikeContentSearch(input string) bool {
-	lower := strings.ToLower(input)
-	for _, w := range []string{
-		"mentioned", "mentions", "which file", "which files",
-		"in which", "containing",
-	} {
-		if strings.Contains(lower, w) {
-			return true
-		}
-	}
-	return false
 }
 
 func (r *REPL) handleSearch(engine, query string) {
@@ -689,7 +662,23 @@ func (r *REPL) handleAmbiguous(input string) {
 	}
 
 	if classification == "COMMAND" {
-		r.handleCommand(input)
+		fields := strings.Fields(input)
+		first := ""
+		if len(fields) > 0 {
+			first = strings.ToLower(fields[0])
+		}
+		hasFlag := false
+		for _, f := range fields {
+			if strings.HasPrefix(f, "-") {
+				hasFlag = true
+				break
+			}
+		}
+		if hasFlag || (first != "" && r.executor.PathExists(first)) {
+			r.handleCommand(input)
+			return
+		}
+		r.handleNL(input)
 		return
 	}
 
