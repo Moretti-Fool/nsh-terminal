@@ -112,6 +112,9 @@ func (c *Classifier) Classify(input string) Result {
 	}
 
 	if c.pathLookup != nil && c.pathLookup(firstToken) {
+		if firstToken == "find" || firstToken == "grep" || firstToken == "cat" || firstToken == "head" || firstToken == "tail" || firstToken == "wc" {
+			return Result{Type: Command}
+		}
 		if len(tokens) >= 4 && allPlainWords(tokens[1:]) {
 			return Result{Type: Ambiguous}
 		}

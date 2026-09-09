@@ -665,6 +665,30 @@ var findFillerWords = map[string]bool{
 	"my": true, "this": true, "that": true, "in": true,
 	"for": true, "of": true, "with": true, "here": true,
 	"there": true, "all": true, "any": true,
+	"is": true, "are": true, "where": true, "which": true,
+	"do": true, "does": true, "has": true, "have": true,
+}
+
+var contentSearchIndicators = map[string]bool{
+	"mentioned": true, "mentions": true, "contains": true, "containing": true,
+	"content": true, "contents": true, "inside": true, "within": true,
+	"says": true, "written": true, "text": true, "about": true,
+	"references": true, "referring": true, "talks": true,
+}
+
+var binaryExtensions = map[string]bool{
+	".exe": true, ".dll": true, ".so": true, ".dylib": true,
+	".bin": true, ".obj": true, ".o": true, ".a": true,
+	".zip": true, ".tar": true, ".gz": true, ".bz2": true,
+	".xz": true, ".7z": true, ".rar": true,
+	".png": true, ".jpg": true, ".jpeg": true, ".gif": true,
+	".bmp": true, ".ico": true, ".svg": true, ".webp": true,
+	".mp3": true, ".mp4": true, ".avi": true, ".mov": true,
+	".wav": true, ".flac": true, ".mkv": true,
+	".pdf": true, ".doc": true, ".docx": true, ".xls": true,
+	".xlsx": true, ".ppt": true, ".pptx": true,
+	".woff": true, ".woff2": true, ".ttf": true, ".eot": true,
+	".pyc": true, ".class": true, ".wasm": true,
 }
 
 var errMaxResults = fmt.Errorf("max results")
@@ -718,9 +742,30 @@ func builtinFind(tokens []string) (RunResult, bool) {
 	}
 
 	if !hasFlags && len(keywords) > 0 {
+		contentSearch := false
+		var searchKeywords []string
+		for _, kw := range keywords {
+			if contentSearchIndicators[strings.ToLower(kw)] {
+				contentSearch = true
+			}
+		}
+
+		if contentSearch {
+			for _, kw := range keywords {
+				kwLower := strings.ToLower(kw)
+				if !findFillerWords[kwLower] && !contentSearchIndicators[kwLower] && len(kw) >= 3 {
+					searchKeywords = append(searchKeywords, kw)
+				}
+			}
+			if len(searchKeywords) > 0 {
+				return builtinFindContent(dir, searchKeywords, start)
+			}
+		}
+
 		var filtered []string
 		for _, kw := range keywords {
-			if !findFillerWords[strings.ToLower(kw)] {
+			kwLower := strings.ToLower(kw)
+			if !findFillerWords[kwLower] && len(kw) >= 3 {
 				filtered = append(filtered, kw)
 			}
 		}
@@ -793,6 +838,87 @@ func builtinFind(tokens []string) (RunResult, bool) {
 
 	if count == 0 {
 		msg := "find: no matches found\n"
+		fmt.Print(msg)
+		buf.WriteString(msg)
+	} else if count >= maxResults {
+		msg := fmt.Sprintf("... (%d results shown, more may exist)\n", maxResults)
+		fmt.Print(msg)
+		buf.WriteString(msg)
+	}
+
+	return RunResult{Output: buf.String(), DurationMs: time.Since(start).Milliseconds()}, true
+}
+
+func builtinFindContent(dir string, keywords []string, start time.Time) (RunResult, bool) {
+	var buf strings.Builder
+	count := 0
+	maxResults := 50
+	maxFileSize := int64(1024 * 1024) // skip files > 1MB
+
+	lowerKeywords := make([]string, len(keywords))
+	for i, kw := range keywords {
+		lowerKeywords[i] = strings.ToLower(kw)
+	}
+
+	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if count >= maxResults {
+			return errMaxResults
+		}
+
+		base := filepath.Base(path)
+		if strings.HasPrefix(base, ".") && path != dir && path != "." {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if info.IsDir() || info.Size() == 0 || info.Size() > maxFileSize {
+			return nil
+		}
+
+		ext := strings.ToLower(filepath.Ext(base))
+		if binaryExtensions[ext] {
+			return nil
+		}
+
+		f, err := os.Open(path)
+		if err != nil {
+			return nil
+		}
+		defer f.Close()
+
+		scanner := bufio.NewScanner(f)
+		lineNum := 0
+		for scanner.Scan() {
+			if count >= maxResults {
+				return errMaxResults
+			}
+			lineNum++
+			line := scanner.Text()
+			lowerLine := strings.ToLower(line)
+			allFound := true
+			for _, kw := range lowerKeywords {
+				if !strings.Contains(lowerLine, kw) {
+					allFound = false
+					break
+				}
+			}
+			if allFound {
+				out := fmt.Sprintf("%s:%d: %s\n", path, lineNum, line)
+				fmt.Print(out)
+				buf.WriteString(out)
+				count++
+			}
+		}
+		return nil
+	})
+
+	if count == 0 {
+		msg := fmt.Sprintf("find: no content matching %q found\n", strings.Join(keywords, " "))
 		fmt.Print(msg)
 		buf.WriteString(msg)
 	} else if count >= maxResults {

@@ -94,7 +94,6 @@ func TestClassifyWindowsPath(t *testing.T) {
 func TestClassifyAmbiguousNL(t *testing.T) {
 	c := New(testPathLookup, nil)
 	for _, input := range []string{
-		"find nsh design file",
 		"sort these items by name",
 		"kill all background tasks",
 	} {
