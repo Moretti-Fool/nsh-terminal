@@ -686,35 +686,43 @@ func (r *REPL) handleUp(args []string) {
 	if len(args) == 0 {
 		fmt.Println("[nsh] Usage: nsh up <workflow-name>")
 		fmt.Println("      Launches services defined in a parallel workflow.")
-		fmt.Println("      Create one with: nsh edit <name>, then add [services] sections.")
-		fmt.Println()
-		fmt.Println("  Example workflow file (morning-stack.toml):")
-		fmt.Println(`    name = "morning-stack"`)
-		fmt.Println(`    mode = "parallel"`)
-		fmt.Println()
-		fmt.Println(`    [[services]]`)
-		fmt.Println(`    name = "tpro-backend"`)
-		fmt.Println(`    dir = "~/tpro_backend"`)
-		fmt.Println(`    command = "npm run dev"`)
-		fmt.Println()
-		fmt.Println(`    [[services]]`)
-		fmt.Println(`    name = "investment"`)
-		fmt.Println(`    dir = "~/repo/investment"`)
-		fmt.Println(`    setup = "venv/Scripts/activate.ps1"`)
-		fmt.Println(`    command = "uvicorn main:app --reload"`)
+		fmt.Println("      If the workflow doesn't exist, nsh walks you through creating it.")
 		return
 	}
 
 	wf, err := r.workflows.Load(args[0])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[nsh] %v\n", err)
-		return
+		fmt.Printf("[nsh] Workflow %q not found. Create it now? [Y/n] ", args[0])
+		var confirm string
+		fmt.Scanln(&confirm)
+		confirm = strings.ToLower(strings.TrimSpace(confirm))
+		if confirm != "" && confirm != "y" && confirm != "yes" {
+			return
+		}
+		created := r.interactiveServiceBuilder(args[0])
+		if !created {
+			return
+		}
+		wf, err = r.workflows.Load(args[0])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[nsh] %v\n", err)
+			return
+		}
 	}
 
 	if len(wf.Services) == 0 {
-		fmt.Println("[nsh] This workflow has no [services] defined.")
-		fmt.Println("      Use \"nsh edit " + args[0] + "\" to add [[services]] sections.")
-		return
+		fmt.Println("[nsh] This workflow has no services defined.")
+		fmt.Printf("[nsh] Add services now? [Y/n] ")
+		var confirm string
+		fmt.Scanln(&confirm)
+		confirm = strings.ToLower(strings.TrimSpace(confirm))
+		if confirm == "" || confirm == "y" || confirm == "yes" {
+			r.interactiveServiceBuilder(args[0])
+			wf, _ = r.workflows.Load(args[0])
+		}
+		if len(wf.Services) == 0 {
+			return
+		}
 	}
 
 	if r.services != nil {
@@ -744,6 +752,95 @@ func (r *REPL) handleUp(args []string) {
 	}
 	fmt.Println("[nsh] All services launched. Logs stream above.")
 	fmt.Println("      Use \"nsh status\" to check, \"nsh down\" to stop all.")
+}
+
+func (r *REPL) interactiveServiceBuilder(name string) bool {
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Buffer(make([]byte, 64*1024), 64*1024)
+
+	fmt.Printf("\n[nsh] Creating workflow: %s\n", name)
+	fmt.Println("      Add your services one by one. Type \"done\" when finished.")
+	fmt.Println()
+
+	var services []workflow.Service
+	count := 0
+
+	for {
+		count++
+		fmt.Printf("  Service %d name (or \"done\"): ", count)
+		if !scanner.Scan() {
+			break
+		}
+		svcName := strings.TrimSpace(scanner.Text())
+		if svcName == "" {
+			count--
+			continue
+		}
+		if strings.ToLower(svcName) == "done" {
+			break
+		}
+
+		fmt.Printf("  Directory: ")
+		if !scanner.Scan() {
+			break
+		}
+		dir := strings.TrimSpace(scanner.Text())
+		if dir == "" {
+			dir = "."
+		}
+
+		fmt.Printf("  Run command: ")
+		if !scanner.Scan() {
+			break
+		}
+		command := strings.TrimSpace(scanner.Text())
+		if command == "" {
+			fmt.Println("  [skipped — command is required]")
+			count--
+			continue
+		}
+
+		fmt.Printf("  Setup command (optional, Enter to skip): ")
+		if !scanner.Scan() {
+			break
+		}
+		setup := strings.TrimSpace(scanner.Text())
+
+		services = append(services, workflow.Service{
+			Name:    svcName,
+			Dir:     dir,
+			Command: command,
+			Setup:   setup,
+		})
+		fmt.Printf("  Added %q.\n\n", svcName)
+	}
+
+	if len(services) == 0 {
+		fmt.Println("[nsh] No services added. Cancelled.")
+		return false
+	}
+
+	wf := workflow.Workflow{
+		Name:     name,
+		Mode:     "parallel",
+		Services: services,
+	}
+	if err := r.workflows.Save(wf); err != nil {
+		fmt.Fprintf(os.Stderr, "[nsh] save error: %v\n", err)
+		return false
+	}
+	fmt.Printf("[nsh] Workflow %q saved with %d services.\n", name, len(services))
+	fmt.Printf("      Launch anytime with: nsh up %s\n", name)
+	fmt.Printf("      Edit later with:     nsh edit %s\n\n", name)
+
+	fmt.Print("[nsh] Launch now? [Y/n] ")
+	if scanner.Scan() {
+		answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
+		if answer != "" && answer != "y" && answer != "yes" {
+			return true
+		}
+	}
+	return true
 }
 
 func (r *REPL) handleDown() {
