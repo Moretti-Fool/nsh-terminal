@@ -28,15 +28,19 @@ func New(baseURL, classifierModel, generationModel string, timeout time.Duration
 		classifierModel: classifierModel,
 		generationModel: generationModel,
 		timeout:         timeout,
-		httpClient:      &http.Client{Timeout: timeout},
+		// Request context enforces timeout so a tool round can use two chats.
+		httpClient: &http.Client{},
 	}
 }
 
 type generateRequest struct {
-	Model  string `json:"model"`
-	Prompt string `json:"prompt"`
-	System string `json:"system,omitempty"`
-	Stream bool   `json:"stream"`
+	Model     string          `json:"model"`
+	Prompt    string          `json:"prompt"`
+	System    string          `json:"system,omitempty"`
+	Stream    bool            `json:"stream"`
+	Format    json.RawMessage `json:"format,omitempty"`
+	Options   map[string]any  `json:"options,omitempty"`
+	KeepAlive string          `json:"keep_alive,omitempty"`
 }
 
 type generateResponse struct {
@@ -44,43 +48,18 @@ type generateResponse struct {
 	Done     bool   `json:"done"`
 }
 
-func (c *Client) BuildSystemPrompt(cwd string) string {
-	shellName := c.shellHint
-	if shellName == "" {
-		if runtime.GOOS == "windows" {
-			shellName = "powershell"
-		} else {
-			shellName = "bash"
-		}
+func (c *Client) ShellName() string {
+	if c.shellHint != "" {
+		return c.shellHint
 	}
-	bins := ""
-	if len(c.availableBins) > 0 {
-		bins = "\nAvailable: " + strings.Join(c.availableBins, ", ")
+	if runtime.GOOS == "windows" {
+		return "powershell"
 	}
-	shellNote := ""
-	switch shellName {
-	case "powershell", "pwsh":
-		shellNote = `
-Use PowerShell syntax (cmdlets, pipelines, $_).
-Prefer Get-ChildItem, Sort-Object, Select-Object, Get-Process, Get-Service, Get-NetTCPConnection, Restart-Service.
-To search file contents, use Get-ChildItem -Recurse -File | Select-String -Pattern 'text' — do not Get-Content a guessed filename.
-Do not use cmd.exe switches such as dir /b, dir /w, dir /o-s — those are not PowerShell.
-Native binaries listed after Available: may be called when needed — never print that list.
-Output at most 3 commands. No Out-GridView, Read-Host, pause, more, or other interactive UI.`
-	case "cmd":
-		shellNote = `
-Use ONLY cmd.exe syntax. Do NOT use PowerShell cmdlets.
-Use dir, sort, findstr, type, more, for, forfiles.
-Example: dir /o-s`
-	}
-	return fmt.Sprintf(`You are nsh, a terminal command translator.
-OS: %s
-Shell: %s
-CWD: %s%s
+	return "bash"
+}
 
-Respond with ONLY the shell command(s) to execute.
-One command per line. No explanations. No markdown. No code fences.
-If multiple commands are needed, separate with newlines.%s`, runtime.GOOS, shellName, cwd, bins, shellNote)
+func (c *Client) BuildSystemPrompt(cwd string) string {
+	return c.buildTranslatorPrompt(Env{CWD: cwd, Shell: c.ShellName()}, nil)
 }
 
 func SanitizeGenerated(s string) string {
@@ -92,6 +71,7 @@ func SanitizeGenerated(s string) string {
 	s = strings.TrimPrefix(s, "```bash")
 	s = strings.TrimPrefix(s, "```sh")
 	s = strings.TrimPrefix(s, "```ps1")
+	s = strings.TrimPrefix(s, "```json")
 	s = strings.TrimPrefix(s, "```")
 	s = strings.TrimSuffix(s, "```")
 	s = strings.TrimSpace(s)
@@ -136,35 +116,29 @@ func LooksLikeBinDump(s string) bool {
 }
 
 func (c *Client) Generate(ctx context.Context, input string, cwd string) (string, error) {
-	resp, err := c.doGenerate(ctx, generateRequest{
-		Model:  c.generationModel,
-		Prompt: fmt.Sprintf("User wants to: %s", input),
-		System: c.BuildSystemPrompt(cwd),
-		Stream: false,
+	plan, _, err := c.Translate(ctx, TranslateRequest{
+		Input: input,
+		Env:   Env{CWD: cwd, Shell: c.ShellName()},
 	})
 	if err != nil {
 		return "", err
 	}
-	return SanitizeGenerated(resp.Response), nil
+	return plan.Join(), nil
 }
 
 func (c *Client) RepairCommand(ctx context.Context, input, cwd, failedCmd, errOutput string) (string, error) {
-	system := c.BuildSystemPrompt(cwd) + `
-
-The previous command failed. Emit a corrected command for this OS and shell.
-Failed command: ` + failedCmd + `
-Error:
-` + trimForPrompt(errOutput, 800)
-	resp, err := c.doGenerate(ctx, generateRequest{
-		Model:  c.generationModel,
-		Prompt: fmt.Sprintf("User still wants to: %s", input),
-		System: system,
-		Stream: false,
-	})
+	env := Env{CWD: cwd, Shell: c.ShellName()}
+	system := c.buildTranslatorPrompt(env, nil)
+	msgs := []ChatMessage{
+		{Role: "system", Content: system},
+		{Role: "user", Content: buildUserMessage(input, env)},
+		{Role: "assistant", Content: failedCmd},
+	}
+	plan, _, err := c.Repair(ctx, msgs, errOutput)
 	if err != nil {
 		return "", err
 	}
-	return SanitizeGenerated(resp.Response), nil
+	return plan.Join(), nil
 }
 
 func trimForPrompt(s string, n int) string {
@@ -183,13 +157,29 @@ func (c *Client) ClassifyInput(ctx context.Context, input string) (string, error
 COMMAND = the user is invoking a program or builtin (first word is the executable), e.g. git status, ls -la, docker ps
 NL = English describing a goal or asking a question, even if it does not use words like "please" or "show me"
 If the first word is not a real command, classify as NL.
-Respond with exactly one word: COMMAND or NL. Nothing else.`,
-		Stream: false,
+Respond with JSON {"label":"COMMAND"} or {"label":"NL"}.`,
+		Stream:    false,
+		Format:    classifyFormat,
+		Options:   genOptions(),
+		KeepAlive: "10m",
 	})
 	if err != nil {
 		return "", err
 	}
-	result := strings.TrimSpace(strings.ToUpper(resp.Response))
+	raw := strings.TrimSpace(resp.Response)
+	var dto struct {
+		Label string `json:"label"`
+	}
+	if json.Unmarshal([]byte(extractJSONObject(raw)), &dto) == nil {
+		result := strings.ToUpper(strings.TrimSpace(dto.Label))
+		if result == "COMMAND" || result == "NL" {
+			return result, nil
+		}
+	}
+	result := strings.TrimSpace(strings.ToUpper(raw))
+	if strings.Contains(result, "COMMAND") && !strings.Contains(result, "NL") {
+		return "COMMAND", nil
+	}
 	if result != "COMMAND" && result != "NL" {
 		return "NL", nil
 	}
@@ -205,7 +195,9 @@ Available workflows: %s
 If the user's input matches one of these workflows, respond with EXACTLY the workflow name.
 If none match, respond with NONE.
 Respond with just the name or NONE. Nothing else.`, strings.Join(workflows, ", ")),
-		Stream: false,
+		Stream:    false,
+		Options:   genOptions(),
+		KeepAlive: "10m",
 	})
 	if err != nil {
 		return "", err
@@ -228,10 +220,12 @@ If the script works with files, use paths relative to the current directory.
 CWD: %s`, cwd)
 
 	resp, err := c.doGenerate(ctx, generateRequest{
-		Model:  c.generationModel,
-		Prompt: fmt.Sprintf("Write a Python script to: %s", input),
-		System: system,
-		Stream: false,
+		Model:     c.generationModel,
+		Prompt:    fmt.Sprintf("Write a Python script to: %s", input),
+		System:    system,
+		Stream:    false,
+		Options:   genOptions(),
+		KeepAlive: "10m",
 	})
 	if err != nil {
 		return "", err
@@ -254,10 +248,11 @@ func (c *Client) GenerateStream(ctx context.Context, input string, cwd string, o
 		system = "You are a helpful assistant. Answer questions concisely and accurately."
 	}
 	body := generateRequest{
-		Model:  c.generationModel,
-		Prompt: prompt,
-		System: system,
-		Stream: true,
+		Model:     c.generationModel,
+		Prompt:    prompt,
+		System:    system,
+		Stream:    true,
+		KeepAlive: "10m",
 	}
 	jsonBody, err := json.Marshal(body)
 	if err != nil {

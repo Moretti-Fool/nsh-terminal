@@ -12,8 +12,11 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Ollama.URL != "http://localhost:11434" {
 		t.Errorf("got %s", cfg.Ollama.URL)
 	}
-	if cfg.Ollama.ClassifierModel != "phi3" {
+	if cfg.Ollama.ClassifierModel != "qwen2.5-coder:7b" {
 		t.Errorf("got %s", cfg.Ollama.ClassifierModel)
+	}
+	if cfg.Ollama.TimeoutMs != 45000 {
+		t.Errorf("got timeout %d", cfg.Ollama.TimeoutMs)
 	}
 	if cfg.UI.Prompt != "nsh> " {
 		t.Errorf("got %s", cfg.UI.Prompt)

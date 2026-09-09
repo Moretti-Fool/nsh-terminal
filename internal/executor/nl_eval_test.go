@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nsh-terminal/nsh/internal/config"
+	"github.com/nsh-terminal/nsh/internal/ground"
 	"github.com/nsh-terminal/nsh/internal/ollama"
 )
 
@@ -40,7 +41,7 @@ func TestLiveNLScenarios(t *testing.T) {
 	if err != nil || len(models) == 0 {
 		t.Skip("no Ollama models")
 	}
-	model := pickGenerateModel(cfg.Ollama.GenerationModel, models)
+	model := ollama.PickGenerationModel(cfg.Ollama.GenerationModel, models)
 	if model == "" {
 		t.Skip("no generate-capable Ollama model (only embeddings?)")
 	}
@@ -50,37 +51,51 @@ func TestLiveNLScenarios(t *testing.T) {
 	e := New("auto", "")
 	defer e.Close()
 	client.SetShellHint(e.NLShellName())
-	client.SetAvailableBins(e.AvailableBins())
+	shell := e.NLShellName()
+	cwd, _ := os.Getwd()
+	snap := ground.Capture(cwd, e.PathExists)
 
 	cases := liveNLCases()
 	if len(cases) < 50 {
 		t.Fatalf("need 50+ cases, got %d", len(cases))
 	}
 
-	cwd, _ := os.Getwd()
 	var pass, fail, genOnly int
 	fmt.Printf("\n=== live NL eval (%d cases, model %s) ===\n", len(cases), client.GenerationModel())
 
 	for i, tc := range cases {
 		ctx := context.Background()
 		genStart := time.Now()
-		generated, err := client.Generate(ctx, tc.input, cwd)
+		plan, msgs, err := client.Translate(ctx, ollama.TranslateRequest{
+			Input: tc.input,
+			Env: ollama.Env{
+				CWD:     snap.CWD,
+				Shell:   shell,
+				Listing: snap.Listing,
+				Present: snap.Present,
+			},
+			RunTool: func(name string, args map[string]any) string {
+				return ground.ExecTool(name, args, cwd, e.PathExists)
+			},
+		})
 		genMs := time.Since(genStart).Milliseconds()
 		if err != nil {
 			fail++
 			t.Logf("[%02d] FAIL generate %q: %v (%dms)", i+1, tc.input, err, genMs)
 			continue
 		}
+		if vErr := ollama.ValidatePlan(plan, shell); vErr != nil {
+			repaired, newMsgs, rerr := client.Repair(ctx, msgs, vErr.Error())
+			if rerr == nil && ollama.ValidatePlan(repaired, shell) == nil {
+				plan = repaired
+				msgs = newMsgs
+			}
+		}
+		generated := plan.Join()
 		if generated == "" {
 			fail++
 			t.Logf("[%02d] FAIL empty command for %q (%dms)", i+1, tc.input, genMs)
 			continue
-		}
-		if ollama.LooksLikeBinDump(generated) {
-			repaired, rerr := client.RepairCommand(ctx, tc.input, cwd, generated, "Do not list binaries. Emit one PowerShell command.")
-			if rerr == nil && repaired != "" && !ollama.LooksLikeBinDump(repaired) {
-				generated = repaired
-			}
 		}
 
 		low := strings.ToLower(generated)
@@ -110,13 +125,15 @@ func TestLiveNLScenarios(t *testing.T) {
 				last, err = e.RunGenerated(line)
 				if err != nil || last.ExitCode != 0 {
 					ok = false
-					if LooksLikeUnknownCommand(last.Output) || (err == nil && last.ExitCode != 0) {
-						repaired, rerr := client.RepairCommand(ctx, tc.input, cwd, generated, last.Output)
-						if rerr == nil && repaired != "" && repaired != generated {
-							generated = repaired
-							last, err = e.RunGenerated(repaired)
-							ok = err == nil && last.ExitCode == 0
-						}
+					reason := last.Output
+					if reason == "" {
+						reason = fmt.Sprintf("exit %d", last.ExitCode)
+					}
+					repaired, _, rerr := client.Repair(ctx, msgs, reason)
+					if rerr == nil && repaired.Join() != "" && repaired.Join() != generated && ollama.ValidatePlan(repaired, shell) == nil {
+						generated = repaired.Join()
+						last, err = e.RunGenerated(generated)
+						ok = err == nil && last.ExitCode == 0
 					}
 					break
 				}
@@ -149,39 +166,6 @@ func TestLiveNLScenarios(t *testing.T) {
 	if fail > len(cases)/2 {
 		t.Fatalf("too many failures: %d/%d", fail, len(cases))
 	}
-}
-
-func pickGenerateModel(preferred string, models []ollama.ModelInfo) string {
-	isBad := func(name string) bool {
-		n := strings.ToLower(name)
-		return strings.Contains(n, "embed") || strings.Contains(n, "nomic") ||
-			strings.Contains(n, "minilm") || strings.Contains(n, "moondream") ||
-			strings.Contains(n, "0.5b") || strings.Contains(n, "1.5b")
-	}
-	order := []string{
-		preferred,
-		"llama3.2:3b", "qwen2.5-coder:3b", "phi3:mini",
-		"qwen2.5:7b-instruct-q4_K_M", "mistral:latest", "llama3.2",
-	}
-	for _, want := range order {
-		if want == "" || isBad(want) {
-			continue
-		}
-		for _, m := range models {
-			if isBad(m.Name) {
-				continue
-			}
-			if strings.EqualFold(m.Name, want) || strings.HasPrefix(strings.ToLower(m.Name), strings.ToLower(want)) {
-				return m.Name
-			}
-		}
-	}
-	for _, m := range models {
-		if !isBad(m.Name) {
-			return m.Name
-		}
-	}
-	return ""
 }
 
 func liveNLCases() []nlCase {

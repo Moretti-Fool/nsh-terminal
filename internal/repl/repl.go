@@ -16,6 +16,7 @@ import (
 	"github.com/nsh-terminal/nsh/internal/classifier"
 	"github.com/nsh-terminal/nsh/internal/config"
 	"github.com/nsh-terminal/nsh/internal/executor"
+	"github.com/nsh-terminal/nsh/internal/ground"
 	"github.com/nsh-terminal/nsh/internal/history"
 	"github.com/nsh-terminal/nsh/internal/ollama"
 	"github.com/nsh-terminal/nsh/internal/scratch"
@@ -328,42 +329,47 @@ func (r *REPL) handleNL(input string) {
 		cwd = "."
 	}
 	ctx := context.Background()
+	snap := ground.Capture(cwd, r.executor.PathExists)
+	shell := r.executor.NLShellName()
 
 	fmt.Print("[nsh] thinking...")
-	generated, err := r.ollama.Generate(ctx, input, cwd)
+	plan, msgs, err := r.ollama.Translate(ctx, ollama.TranslateRequest{
+		Input:    input,
+		Env:      ollama.Env{CWD: snap.CWD, Shell: shell, Listing: snap.Listing, Present: snap.Present},
+		Examples: r.nlFewShots(),
+		RunTool: func(name string, args map[string]any) string {
+			return ground.ExecTool(name, args, cwd, r.executor.PathExists)
+		},
+	})
 	fmt.Print("\r                \r")
-
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[nsh] Ollama error: %v\n", err)
 		return
 	}
-	if generated == "" {
-		fmt.Println("[nsh] No command generated.")
-		return
-	}
-	if ollama.LooksLikeBinDump(generated) {
+
+	if vErr := ollama.ValidatePlan(plan, shell); vErr != nil {
 		fmt.Print("[nsh] retrying...")
-		repaired, rerr := r.ollama.RepairCommand(ctx, input, cwd, generated, "Do not list binaries. Emit one PowerShell command for the user's request.")
+		repaired, newMsgs, rerr := r.ollama.Repair(ctx, msgs, vErr.Error())
 		fmt.Print("\r                 \r")
-		if rerr != nil || repaired == "" || ollama.LooksLikeBinDump(repaired) {
+		if rerr != nil || ollama.ValidatePlan(repaired, shell) != nil {
 			fmt.Println("[nsh] Could not translate that request into a command.")
 			return
 		}
-		generated = repaired
+		plan = repaired
+		msgs = newMsgs
+	}
+
+	generated := plan.Join()
+	if generated == "" {
+		fmt.Println("[nsh] No command generated.")
+		return
 	}
 
 	if r.cfg.UI.ShowGeneratedCommand {
 		fmt.Printf("\033[36m> %s\033[0m\n", generated)
 	}
-
-	if r.cfg.UI.ConfirmDestructive && r.executor.IsDestructive(generated) {
-		fmt.Print("[nsh] This looks destructive. Run it? [y/N] ")
-		var confirm string
-		fmt.Scanln(&confirm)
-		if strings.ToLower(strings.TrimSpace(confirm)) != "y" {
-			fmt.Println("[nsh] Cancelled.")
-			return
-		}
+	if !r.confirmIfDestructive(generated) {
+		return
 	}
 
 	ok, result := r.runGeneratedCommands(generated)
@@ -373,35 +379,51 @@ func (r *REPL) handleNL(input string) {
 		return
 	}
 
-	if executor.LooksLikeUnknownCommand(result.Output) || result.ExitCode != 0 {
-		fmt.Print("[nsh] retrying...")
-		repaired, rerr := r.ollama.RepairCommand(ctx, input, cwd, generated, result.Output)
-		fmt.Print("\r                 \r")
-		if rerr != nil || repaired == "" || repaired == generated {
-			r.recordGenerated(generated)
-			r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
-			return
-		}
-		if r.cfg.UI.ShowGeneratedCommand {
-			fmt.Printf("\033[36m> %s\033[0m\n", repaired)
-		}
-		if r.cfg.UI.ConfirmDestructive && r.executor.IsDestructive(repaired) {
-			fmt.Print("[nsh] This looks destructive. Run it? [y/N] ")
-			var confirm string
-			fmt.Scanln(&confirm)
-			if strings.ToLower(strings.TrimSpace(confirm)) != "y" {
-				fmt.Println("[nsh] Cancelled.")
-				return
-			}
-		}
-		_, result = r.runGeneratedCommands(repaired)
-		r.recordGenerated(repaired)
-		r.saveHistory(input, "nl", repaired, result.ExitCode, result.Output, result.DurationMs)
+	reason := result.Output
+	if reason == "" {
+		reason = fmt.Sprintf("exit code %d", result.ExitCode)
+	}
+	fmt.Print("[nsh] retrying...")
+	repaired, _, rerr := r.ollama.Repair(ctx, msgs, reason)
+	fmt.Print("\r                 \r")
+	if rerr != nil || repaired.Join() == "" || repaired.Join() == generated || ollama.ValidatePlan(repaired, shell) != nil {
+		r.recordGenerated(generated)
+		r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
 		return
 	}
-
+	generated = repaired.Join()
+	if r.cfg.UI.ShowGeneratedCommand {
+		fmt.Printf("\033[36m> %s\033[0m\n", generated)
+	}
+	if !r.confirmIfDestructive(generated) {
+		return
+	}
+	_, result = r.runGeneratedCommands(generated)
 	r.recordGenerated(generated)
 	r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
+}
+
+func (r *REPL) nlFewShots() []ollama.FewShot {
+	entries := r.history.SuccessfulNL(3)
+	out := make([]ollama.FewShot, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, ollama.FewShot{Input: e.Input, Command: e.Generated})
+	}
+	return out
+}
+
+func (r *REPL) confirmIfDestructive(generated string) bool {
+	if !r.cfg.UI.ConfirmDestructive || !r.executor.IsDestructive(generated) {
+		return true
+	}
+	fmt.Print("[nsh] This looks destructive. Run it? [y/N] ")
+	var confirm string
+	fmt.Scanln(&confirm)
+	if strings.ToLower(strings.TrimSpace(confirm)) != "y" {
+		fmt.Println("[nsh] Cancelled.")
+		return false
+	}
+	return true
 }
 
 func (r *REPL) recordGenerated(generated string) {
@@ -1155,7 +1177,7 @@ func (r *REPL) handleListModels() {
 		return
 	}
 	if len(models) == 0 {
-		fmt.Println("[nsh] No models installed. Pull one with: ollama pull llama3.2:3b")
+		fmt.Println("[nsh] No models installed. Pull one with: ollama pull qwen2.5-coder:7b")
 		return
 	}
 	fmt.Println("[nsh] Available Ollama models:")
@@ -1232,16 +1254,13 @@ func (r *REPL) autoDetectModel() {
 	}
 
 	genModel := r.ollama.GenerationModel()
-	for _, m := range models {
-		if m.Name == genModel {
-			return
-		}
+	picked := ollama.PickGenerationModel(genModel, models)
+	if picked == "" || picked == genModel {
+		return
 	}
-
-	fallback := models[0].Name
-	r.ollama.SetGenerationModel(fallback)
-	r.ollama.SetClassifierModel(fallback)
-	fmt.Printf("[nsh] Model %q not found. Using %q instead.\n", genModel, fallback)
+	r.ollama.SetGenerationModel(picked)
+	r.ollama.SetClassifierModel(picked)
+	fmt.Printf("[nsh] Model %q not found. Using %q instead.\n", genModel, picked)
 	fmt.Println("      Run \"nsh models\" to see available models, \"nsh model <name>\" to switch.")
 }
 

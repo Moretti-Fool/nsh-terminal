@@ -59,9 +59,9 @@ func Default() Config {
 	return Config{
 		Ollama: OllamaConfig{
 			URL:             "http://localhost:11434",
-			ClassifierModel: "phi3",
-			GenerationModel: "llama3.2",
-			TimeoutMs:       10000,
+			ClassifierModel: "qwen2.5-coder:7b",
+			GenerationModel: "qwen2.5-coder:7b",
+			TimeoutMs:       45000,
 		},
 		Shell: ShellConfig{
 			Default:   "auto",

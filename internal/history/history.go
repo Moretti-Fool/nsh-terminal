@@ -76,6 +76,25 @@ func (h *History) ReadRange(from, to time.Time) ([]Entry, error) {
 	return all, nil
 }
 
+// SuccessfulNL returns recent NL translations that exited 0, oldest first (few-shot order).
+func (h *History) SuccessfulNL(limit int) []Entry {
+	if limit <= 0 {
+		return nil
+	}
+	all := h.LastN(80)
+	var newest []Entry
+	for i := len(all) - 1; i >= 0 && len(newest) < limit; i-- {
+		e := all[i]
+		if e.Type == "nl" && e.ExitCode == 0 && strings.TrimSpace(e.Generated) != "" {
+			newest = append(newest, e)
+		}
+	}
+	for i, j := 0, len(newest)-1; i < j; i, j = i+1, j-1 {
+		newest[i], newest[j] = newest[j], newest[i]
+	}
+	return newest
+}
+
 func (h *History) LastN(n int) []Entry {
 	today := time.Now()
 	var all []Entry

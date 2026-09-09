@@ -65,6 +65,17 @@ func TestLastN(t *testing.T) {
 	}
 }
 
+func TestSuccessfulNL(t *testing.T) {
+	h := New(t.TempDir(), 500)
+	h.Append(Entry{Timestamp: time.Now(), Input: "ls", Type: "command", CWD: "/tmp"})
+	h.Append(Entry{Timestamp: time.Now(), Input: "fail", Type: "nl", Generated: "nope", ExitCode: 1, CWD: "/tmp"})
+	h.Append(Entry{Timestamp: time.Now(), Input: "show files", Type: "nl", Generated: "Get-ChildItem", ExitCode: 0, CWD: "/tmp"})
+	got := h.SuccessfulNL(3)
+	if len(got) != 1 || got[0].Generated != "Get-ChildItem" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
 func TestRotation(t *testing.T) {
 	tmp := t.TempDir()
 	h := New(tmp, 500)
