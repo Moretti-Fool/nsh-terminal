@@ -59,6 +59,9 @@ Getting started:
 Interactive commands:
   nsh help                  show full command reference
   nsh models                list / switch Ollama models
+  nsh run <description>     generate and run a Python script
+  nsh up <workflow>          launch parallel services
+  nsh down                  stop all services
   nsh record start          start recording a workflow
   nsh record stop "name"    save recorded workflow
   nsh workflows             list saved workflows

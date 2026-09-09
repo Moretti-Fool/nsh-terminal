@@ -21,7 +21,7 @@ import (
 	"github.com/nsh-terminal/nsh/internal/workflow"
 )
 
-const Version = "1.0.0"
+const Version = "1.1.0"
 
 type REPL struct {
 	cfg        config.Config
@@ -78,15 +78,12 @@ func (r *REPL) Run() error {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 64*1024), 64*1024)
 
-	// Handle Ctrl+C gracefully
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt)
 	go func() {
 		for range sigCh {
 			if r.recording {
-				r.recording = false
-				r.recorded = nil
-				fmt.Println("\n[nsh] Recording cancelled.")
+				fmt.Println("\n[nsh] Ctrl+C — recording still active. Use \"nsh record stop\" or \"nsh record cancel\".")
 			}
 			fmt.Print("\n")
 			r.printPrompt()
@@ -98,6 +95,11 @@ func (r *REPL) Run() error {
 	for {
 		r.printPrompt()
 		if !scanner.Scan() {
+			if scanner.Err() != nil {
+				scanner = bufio.NewScanner(os.Stdin)
+				scanner.Buffer(make([]byte, 64*1024), 64*1024)
+				continue
+			}
 			break
 		}
 
@@ -585,8 +587,16 @@ func (r *REPL) handleRecord(args []string) {
 		}
 		fmt.Printf("[nsh] Workflow %q saved (%d commands)\n", name, len(r.recorded))
 		r.recorded = nil
+	case "cancel":
+		if !r.recording {
+			fmt.Println("[nsh] Not currently recording.")
+			return
+		}
+		r.recording = false
+		r.recorded = nil
+		fmt.Println("[nsh] Recording cancelled.")
 	default:
-		fmt.Println("[nsh] Usage: nsh record start | nsh record stop \"name\"")
+		fmt.Println("[nsh] Usage: nsh record start | stop \"name\" | cancel")
 	}
 }
 
