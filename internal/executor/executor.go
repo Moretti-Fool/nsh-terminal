@@ -71,6 +71,8 @@ func (e *Executor) TryBuiltin(command string) (RunResult, bool) {
 		return builtinRm(tokens)
 	case "echo":
 		return builtinEcho(tokens)
+	case "find":
+		return builtinFind(tokens)
 	case "grep":
 		if len(tokens) >= 3 {
 			return builtinGrep(tokens)

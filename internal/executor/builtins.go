@@ -657,3 +657,149 @@ func builtinGrep(tokens []string) (RunResult, bool) {
 	}
 	return RunResult{Output: buf.String(), ExitCode: exitCode, DurationMs: time.Since(start).Milliseconds()}, true
 }
+
+var findFillerWords = map[string]bool{
+	"file": true, "files": true, "folder": true, "folders": true,
+	"directory": true, "directories": true, "named": true,
+	"called": true, "the": true, "a": true, "an": true,
+	"my": true, "this": true, "that": true, "in": true,
+	"for": true, "of": true, "with": true, "here": true,
+	"there": true, "all": true, "any": true,
+}
+
+var errMaxResults = fmt.Errorf("max results")
+
+func builtinFind(tokens []string) (RunResult, bool) {
+	start := time.Now()
+
+	dir := "."
+	namePattern := ""
+	typeFilter := ""
+	var keywords []string
+	hasFlags := false
+
+	i := 1
+	for i < len(tokens) {
+		switch tokens[i] {
+		case "-name":
+			hasFlags = true
+			if i+1 < len(tokens) {
+				namePattern = tokens[i+1]
+				i += 2
+				continue
+			}
+		case "-type":
+			hasFlags = true
+			if i+1 < len(tokens) {
+				typeFilter = tokens[i+1]
+				i += 2
+				continue
+			}
+		case "-iname":
+			hasFlags = true
+			if i+1 < len(tokens) {
+				namePattern = strings.ToLower(tokens[i+1])
+				i += 2
+				continue
+			}
+		default:
+			if !strings.HasPrefix(tokens[i], "-") {
+				keywords = append(keywords, tokens[i])
+			}
+		}
+		i++
+	}
+
+	if len(keywords) > 0 {
+		if info, err := os.Stat(keywords[0]); err == nil && info.IsDir() {
+			dir = keywords[0]
+			keywords = keywords[1:]
+		}
+	}
+
+	if !hasFlags && len(keywords) > 0 {
+		var filtered []string
+		for _, kw := range keywords {
+			if !findFillerWords[strings.ToLower(kw)] {
+				filtered = append(filtered, kw)
+			}
+		}
+		if len(filtered) > 0 {
+			keywords = filtered
+		}
+	}
+
+	var buf strings.Builder
+	count := 0
+	maxResults := 50
+
+	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if count >= maxResults {
+			return errMaxResults
+		}
+
+		base := filepath.Base(path)
+		if strings.HasPrefix(base, ".") && path != dir && path != "." {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if path == dir || path == "." {
+			return nil
+		}
+
+		if typeFilter == "f" && info.IsDir() {
+			return nil
+		}
+		if typeFilter == "d" && !info.IsDir() {
+			return nil
+		}
+
+		matched := false
+		if namePattern != "" {
+			ok, _ := filepath.Match(namePattern, base)
+			if !ok {
+				ok, _ = filepath.Match(namePattern, strings.ToLower(base))
+			}
+			matched = ok
+		} else if len(keywords) > 0 {
+			lowerBase := strings.ToLower(base)
+			lowerPath := strings.ToLower(path)
+			for _, kw := range keywords {
+				kwLower := strings.ToLower(kw)
+				if strings.Contains(lowerBase, kwLower) || strings.Contains(lowerPath, kwLower) {
+					matched = true
+					break
+				}
+			}
+		} else {
+			matched = true
+		}
+
+		if matched {
+			line := path + "\n"
+			fmt.Print(line)
+			buf.WriteString(line)
+			count++
+		}
+
+		return nil
+	})
+
+	if count == 0 {
+		msg := "find: no matches found\n"
+		fmt.Print(msg)
+		buf.WriteString(msg)
+	} else if count >= maxResults {
+		msg := fmt.Sprintf("... (%d results shown, more may exist)\n", maxResults)
+		fmt.Print(msg)
+		buf.WriteString(msg)
+	}
+
+	return RunResult{Output: buf.String(), DurationMs: time.Since(start).Milliseconds()}, true
+}
