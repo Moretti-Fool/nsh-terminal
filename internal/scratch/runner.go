@@ -2,6 +2,7 @@ package scratch
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -117,7 +118,10 @@ func defaultScratchDir() string {
 	if runtime.GOOS == "windows" {
 		return filepath.Join(os.Getenv("APPDATA"), "nsh", "scratch")
 	}
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = os.TempDir()
+	}
 	return filepath.Join(home, ".config", "nsh", "scratch")
 }
 
@@ -220,6 +224,15 @@ func (r *Runner) InstallMissing(packages []string) error {
 		return nil
 	}
 
+	fmt.Printf("\n[nsh] The script requires missing pip packages: %s\n", strings.Join(toInstall, ", "))
+	fmt.Print("[nsh] Auto-install them? [Y/n] ")
+	var confirm string
+	fmt.Scanln(&confirm)
+	confirm = strings.ToLower(strings.TrimSpace(confirm))
+	if confirm != "" && confirm != "y" && confirm != "yes" {
+		return fmt.Errorf("pip install cancelled by user")
+	}
+
 	fmt.Printf("[nsh] Installing: %s\n", strings.Join(toInstall, ", "))
 	args := append([]string{"install", "-q"}, toInstall...)
 	cmd := exec.Command(r.pipPath(), args...)
@@ -263,14 +276,22 @@ func (r *Runner) Run(input, script string) error {
 	}
 
 	fmt.Printf("[nsh] Script saved: %s\n", scriptPath)
-	cmd := exec.Command(pythonExe, scriptPath)
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, pythonExe, scriptPath)
 	cmd.Dir, _ = os.Getwd()
 	cmd.Env = os.Environ()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
 
-	return cmd.Run()
+	err := cmd.Run()
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("script execution timed out after 10 minutes")
+	}
+	return err
 }
 
 func (r *Runner) refreshInstalled() {

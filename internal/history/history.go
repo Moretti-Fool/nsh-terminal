@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,6 +21,12 @@ type Entry struct {
 	OutputPreview string    `json:"output_preview,omitempty"`
 	CWD           string    `json:"cwd"`
 	DurationMs    int64     `json:"duration_ms,omitempty"`
+}
+
+var scannerBufPool = sync.Pool{
+	New: func() interface{} {
+		return make([]byte, 1024*1024)
+	},
 }
 
 type History struct {
@@ -46,8 +53,11 @@ func (h *History) Append(e Entry) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return json.NewEncoder(f).Encode(e)
+	err = json.NewEncoder(f).Encode(e)
+	if cerr := f.Close(); cerr != nil && err == nil {
+		return cerr
+	}
+	return err
 }
 
 func (h *History) ReadDate(t time.Time) ([]Entry, error) {
@@ -70,7 +80,10 @@ func (h *History) LastN(n int) []Entry {
 	today := time.Now()
 	var all []Entry
 	for i := 0; i < 90 && len(all) < n; i++ {
-		entries, _ := h.ReadDate(today.AddDate(0, 0, -i))
+		entries, err := h.ReadDate(today.AddDate(0, 0, -i))
+		if err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "[nsh] trace: failed to read history for %s: %v\n", today.AddDate(0, 0, -i).Format("2006-01-02"), err)
+		}
 		all = append(entries, all...)
 	}
 	if len(all) > n {
@@ -84,7 +97,10 @@ func (h *History) Search(query string, limit int) []Entry {
 	today := time.Now()
 	var results []Entry
 	for i := 0; i < 90 && len(results) < limit; i++ {
-		entries, _ := h.ReadDate(today.AddDate(0, 0, -i))
+		entries, err := h.ReadDate(today.AddDate(0, 0, -i))
+		if err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "[nsh] trace: failed to read history for %s: %v\n", today.AddDate(0, 0, -i).Format("2006-01-02"), err)
+		}
 		for j := len(entries) - 1; j >= 0 && len(results) < limit; j-- {
 			e := entries[j]
 			if strings.Contains(strings.ToLower(e.Input), lower) ||
@@ -155,7 +171,12 @@ func readJSONLFile(path string) ([]Entry, error) {
 	defer f.Close()
 	var entries []Entry
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	
+	bufInterface := scannerBufPool.Get()
+	buf := bufInterface.([]byte)
+	defer scannerBufPool.Put(bufInterface)
+	
+	scanner.Buffer(buf, len(buf))
 	for scanner.Scan() {
 		var e Entry
 		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {

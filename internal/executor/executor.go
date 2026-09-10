@@ -42,7 +42,11 @@ func (e *Executor) WarmPSHost() {
 	if runtime.GOOS != "windows" {
 		return
 	}
-	go func() { _ = e.ensurePSHost() }()
+	go func() {
+		if err := e.ensurePSHost(); err != nil {
+			fmt.Fprintf(os.Stderr, "[nsh] warning: background PowerShell initialization failed: %v\n", err)
+		}
+	}()
 }
 
 func (e *Executor) Close() {
@@ -51,7 +55,9 @@ func (e *Executor) Close() {
 	e.ps = nil
 	e.psMu.Unlock()
 	if h != nil {
-		_ = h.close()
+		if err := h.close(); err != nil {
+			fmt.Fprintf(os.Stderr, "[nsh] trace: close PS host: %v\n", err)
+		}
 	}
 }
 
@@ -78,14 +84,19 @@ func (e *Executor) ensurePSHost() error {
 	e.psWait = make(chan struct{})
 	e.psMu.Unlock()
 
-	h, err := startPSHost()
+	var h *psHost
+	var err error
 
-	e.psMu.Lock()
-	e.ps = h
-	e.psErr = err
-	e.psStarting = false
-	close(e.psWait)
-	e.psMu.Unlock()
+	defer func() {
+		e.psMu.Lock()
+		e.ps = h
+		e.psErr = err
+		e.psStarting = false
+		close(e.psWait)
+		e.psMu.Unlock()
+	}()
+
+	h, err = startPSHost()
 	return err
 }
 

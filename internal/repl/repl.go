@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/chzyer/readline"
@@ -33,7 +34,7 @@ type REPL struct {
 	workflows  *workflow.Manager
 	search     *search.Handler
 	scratch    *scratch.Runner
-	recording  bool
+	recording  atomic.Bool
 	recorded   []string
 	ollamaOK   bool
 	services   *executor.ServiceRunner
@@ -131,7 +132,7 @@ func (r *REPL) runScanner() error {
 	signal.Notify(sigCh, os.Interrupt)
 	go func() {
 		for range sigCh {
-			if r.recording {
+			if r.recording.Load() {
 				fmt.Println("\n[nsh] Ctrl+C — recording still active. Use \"nsh record stop\" or \"nsh record cancel\".")
 			}
 			fmt.Print("\n")
@@ -142,7 +143,21 @@ func (r *REPL) runScanner() error {
 	for {
 		r.printPrompt()
 		if !scanner.Scan() {
-			if scanner.Err() != nil {
+			err := scanner.Err()
+			if err != nil {
+				if err == bufio.ErrTooLong {
+					fmt.Println("\n[nsh] error: input line too long")
+					// Drain the rest of the long line
+					reader := bufio.NewReader(os.Stdin)
+					for {
+						b, err := reader.ReadByte()
+						if err != nil || b == '\n' {
+							break
+						}
+					}
+				} else {
+					fmt.Printf("\n[nsh] input error: %v\n", err)
+				}
 				scanner = bufio.NewScanner(os.Stdin)
 				scanner.Buffer(make([]byte, 64*1024), 64*1024)
 				continue
@@ -164,8 +179,14 @@ func (r *REPL) runScanner() error {
 }
 
 func (r *REPL) promptString() string {
-	cwd, _ := os.Getwd()
-	home, _ := os.UserHomeDir()
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = ""
+	}
 	display := cwd
 	if home != "" && strings.HasPrefix(cwd, home) {
 		display = "~" + cwd[len(home):]
@@ -191,7 +212,7 @@ func (r *REPL) promptString() string {
 	}
 
 	rec := ""
-	if r.recording {
+	if r.recording.Load() {
 		rec = recColor + "[REC]" + reset + " "
 	}
 	return fmt.Sprintf("%s%s%s%s %s", rec, cwdColor, display, reset, r.cfg.UI.Prompt)
@@ -246,7 +267,7 @@ func (r *REPL) handleInput(input string) {
 }
 
 func (r *REPL) handleCommand(input string) {
-	if r.recording {
+	if r.recording.Load() {
 		r.recorded = append(r.recorded, input)
 	}
 
@@ -302,7 +323,10 @@ func (r *REPL) handleNL(input string) {
 		return
 	}
 
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
 	ctx := context.Background()
 
 	fmt.Print("[nsh] thinking...")
@@ -381,7 +405,7 @@ func (r *REPL) handleNL(input string) {
 }
 
 func (r *REPL) recordGenerated(generated string) {
-	if r.recording {
+	if r.recording.Load() {
 		r.recorded = append(r.recorded, generated)
 	}
 }
@@ -707,15 +731,15 @@ func (r *REPL) handleRecord(args []string) {
 	}
 	switch args[0] {
 	case "start":
-		r.recording = true
+		r.recording.Store(true)
 		r.recorded = nil
 		fmt.Println("[nsh] Recording started. Run your commands, then: nsh record stop \"name\"")
 	case "stop":
-		if !r.recording {
+		if !r.recording.Load() {
 			fmt.Println("[nsh] Not currently recording.")
 			return
 		}
-		r.recording = false
+		r.recording.Store(false)
 		if len(args) < 2 {
 			fmt.Println("[nsh] Usage: nsh record stop \"name\"")
 			r.recorded = nil
@@ -730,11 +754,11 @@ func (r *REPL) handleRecord(args []string) {
 		fmt.Printf("[nsh] Workflow %q saved (%d commands)\n", name, len(r.recorded))
 		r.recorded = nil
 	case "cancel":
-		if !r.recording {
+		if !r.recording.Load() {
 			fmt.Println("[nsh] Not currently recording.")
 			return
 		}
-		r.recording = false
+		r.recording.Store(false)
 		r.recorded = nil
 		fmt.Println("[nsh] Recording cancelled.")
 	default:

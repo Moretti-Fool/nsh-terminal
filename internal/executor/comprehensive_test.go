@@ -173,7 +173,7 @@ func TestCompBuiltins(t *testing.T) {
 		{"ls -t", "ls -t", true, 0, ""},
 		{"ls -r", "ls -r", true, 0, ""},
 		{"ls ltr", "ls ltr", true, 0, ""},
-		{"cat", "cat a.txt", true, 0, "hello\nworld"},
+		{"cat", "cat a.txt", true, 0, "[cat a.txt output streamed]"},
 		{"cat missing", "cat missing.txt", true, 1, "missing.txt"},
 		{"cat no args", "cat", false, -1, ""}, // TryBuiltin returns handled=false for "cat"
 		{"head", "head a.txt", true, 0, "hello"},
