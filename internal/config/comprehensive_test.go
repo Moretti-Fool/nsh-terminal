@@ -19,9 +19,9 @@ func TestComprehensiveConfig(t *testing.T) {
 			want interface{}
 		}{
 			{"Ollama.URL", cfg.Ollama.URL, "http://localhost:11434"},
-			{"Ollama.ClassifierModel", cfg.Ollama.ClassifierModel, "phi3"},
-			{"Ollama.GenerationModel", cfg.Ollama.GenerationModel, "llama3.2"},
-			{"Ollama.TimeoutMs", cfg.Ollama.TimeoutMs, 10000},
+			{"Ollama.ClassifierModel", cfg.Ollama.ClassifierModel, "qwen2.5-coder:7b"},
+			{"Ollama.GenerationModel", cfg.Ollama.GenerationModel, "qwen2.5-coder:7b"},
+			{"Ollama.TimeoutMs", cfg.Ollama.TimeoutMs, 45000},
 			{"Shell.Default", cfg.Shell.Default, "auto"},
 			{"Shell.WSLDistro", cfg.Shell.WSLDistro, ""},
 			{"Search.DefaultEngine", cfg.Search.DefaultEngine, "google"},
@@ -116,7 +116,7 @@ func TestComprehensiveConfig(t *testing.T) {
 			content string
 			check func(Config) bool
 		}{
-			{`[ui]` + "\n" + `prompt = "hello> "`, func(c Config) bool { return c.UI.Prompt == "hello> " && c.Ollama.TimeoutMs == 10000 }},
+			{`[ui]` + "\n" + `prompt = "hello> "`, func(c Config) bool { return c.UI.Prompt == "hello> " && c.Ollama.TimeoutMs == 45000 }},
 			{`[ollama]` + "\n" + `timeout_ms = 50`, func(c Config) bool { return c.Ollama.TimeoutMs == 50 && c.UI.Theme == "default" }},
 			{`[search]` + "\n" + `default_engine = "duckduckgo"`, func(c Config) bool { return c.Search.DefaultEngine == "duckduckgo" && c.Search.Engines["google"] != "" }},
 		}
@@ -206,7 +206,7 @@ foo = "bar"
 		cfg.Ollama.TimeoutMs = -100 // negative
 		cfg.History.RetentionDays = 0 // zero
 		cfg.Search.Engines["unicode"] = "🔍" // unicode
-		cfg.UI.Theme = strings.Repeat("A", 10000) // very large string
+		cfg.UI.Theme = strings.Repeat("A", 45000) // very large string
 		
 		tmpDir := t.TempDir()
 		path := filepath.Join(tmpDir, "edge.toml")
@@ -230,7 +230,7 @@ foo = "bar"
 		if loaded.Search.Engines["unicode"] != "🔍" {
 			t.Errorf("Expected unicode engine")
 		}
-		if len(loaded.UI.Theme) != 10000 {
+		if len(loaded.UI.Theme) != 45000 {
 			t.Errorf("Expected large theme string")
 		}
 	})
