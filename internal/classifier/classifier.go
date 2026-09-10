@@ -2,6 +2,7 @@ package classifier
 
 import (
 	"strings"
+	"sync"
 	"unicode"
 )
 
@@ -36,6 +37,7 @@ type PathLookupFunc func(name string) bool
 
 type Classifier struct {
 	pathLookup PathLookupFunc
+	mu         sync.RWMutex
 	workflows  map[string]bool
 }
 
@@ -52,7 +54,9 @@ func (c *Classifier) UpdateWorkflows(names []string) {
 	for _, name := range names {
 		wf[strings.ToLower(name)] = true
 	}
+	c.mu.Lock()
 	c.workflows = wf
+	c.mu.Unlock()
 }
 
 var searchPrefixes = map[string]bool{
@@ -95,7 +99,10 @@ func (c *Classifier) Classify(input string) Result {
 		}
 	}
 
-	if c.workflows[lower] {
+	c.mu.RLock()
+	isWorkflow := c.workflows[lower]
+	c.mu.RUnlock()
+	if isWorkflow {
 		return Result{Type: Workflow, WorkflowName: lower}
 	}
 
@@ -123,6 +130,12 @@ func (c *Classifier) Classify(input string) Result {
 
 	if looksLikeCommand(tokens) {
 		return Result{Type: Command}
+	}
+
+	// Unknown first word and no flags: this is English, not a program invocation.
+	// Do not grow nlSignals for every phrasing — the LLM translator handles the rest.
+	if len(tokens) >= 3 && (c.pathLookup == nil || !c.pathLookup(firstToken)) {
+		return Result{Type: NaturalLanguage}
 	}
 
 	if hasNaturalLanguageStructure(lower) {

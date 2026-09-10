@@ -16,6 +16,8 @@ type Client struct {
 	baseURL         string
 	classifierModel string
 	generationModel string
+	shellHint       string
+	availableBins   []string
 	timeout         time.Duration
 	httpClient      *http.Client
 }
@@ -43,18 +45,94 @@ type generateResponse struct {
 }
 
 func (c *Client) BuildSystemPrompt(cwd string) string {
-	shellName := "bash"
-	if runtime.GOOS == "windows" {
-		shellName = "powershell"
+	shellName := c.shellHint
+	if shellName == "" {
+		if runtime.GOOS == "windows" {
+			shellName = "powershell"
+		} else {
+			shellName = "bash"
+		}
+	}
+	bins := ""
+	if len(c.availableBins) > 0 {
+		bins = "\nAvailable: " + strings.Join(c.availableBins, ", ")
+	}
+	shellNote := ""
+	switch shellName {
+	case "powershell", "pwsh":
+		shellNote = `
+Use PowerShell syntax (cmdlets, pipelines, $_).
+Prefer Get-ChildItem, Sort-Object, Select-Object, Get-Process, Get-Service, Get-NetTCPConnection, Restart-Service.
+To search file contents, use Get-ChildItem -Recurse -File | Select-String -Pattern 'text' — do not Get-Content a guessed filename.
+Do not use cmd.exe switches such as dir /b, dir /w, dir /o-s — those are not PowerShell.
+Native binaries listed after Available: may be called when needed — never print that list.
+Output at most 3 commands. No Out-GridView, Read-Host, pause, more, or other interactive UI.`
+	case "cmd":
+		shellNote = `
+Use ONLY cmd.exe syntax. Do NOT use PowerShell cmdlets.
+Use dir, sort, findstr, type, more, for, forfiles.
+Example: dir /o-s`
 	}
 	return fmt.Sprintf(`You are nsh, a terminal command translator.
 OS: %s
 Shell: %s
-CWD: %s
+CWD: %s%s
 
 Respond with ONLY the shell command(s) to execute.
 One command per line. No explanations. No markdown. No code fences.
-If multiple commands are needed, separate with newlines.`, runtime.GOOS, shellName, cwd)
+If multiple commands are needed, separate with newlines.%s`, runtime.GOOS, shellName, cwd, bins, shellNote)
+}
+
+func SanitizeGenerated(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "```powershell")
+	s = strings.TrimPrefix(s, "```powershell\n")
+	s = strings.TrimPrefix(s, "```pwsh")
+	s = strings.TrimPrefix(s, "```cmd")
+	s = strings.TrimPrefix(s, "```bash")
+	s = strings.TrimPrefix(s, "```sh")
+	s = strings.TrimPrefix(s, "```ps1")
+	s = strings.TrimPrefix(s, "```")
+	s = strings.TrimSuffix(s, "```")
+	s = strings.TrimSpace(s)
+
+	var lines []string
+	for _, line := range strings.Split(s, "\n") {
+		trim := strings.TrimSpace(line)
+		if trim == "" || trim == "```" {
+			continue
+		}
+		if strings.HasPrefix(trim, "```") {
+			continue
+		}
+		lower := strings.ToLower(trim)
+		if strings.HasPrefix(lower, "here is") || strings.HasPrefix(lower, "sure,") {
+			continue
+		}
+		lines = append(lines, trim)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func LooksLikeBinDump(s string) bool {
+	var lines []string
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) < 5 {
+		return false
+	}
+	simple := 0
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) == 1 && !strings.ContainsAny(fields[0], `/\`) {
+			simple++
+		}
+	}
+	return simple >= (len(lines)*3)/4
 }
 
 func (c *Client) Generate(ctx context.Context, input string, cwd string) (string, error) {
@@ -67,7 +145,34 @@ func (c *Client) Generate(ctx context.Context, input string, cwd string) (string
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(resp.Response), nil
+	return SanitizeGenerated(resp.Response), nil
+}
+
+func (c *Client) RepairCommand(ctx context.Context, input, cwd, failedCmd, errOutput string) (string, error) {
+	system := c.BuildSystemPrompt(cwd) + `
+
+The previous command failed. Emit a corrected command for this OS and shell.
+Failed command: ` + failedCmd + `
+Error:
+` + trimForPrompt(errOutput, 800)
+	resp, err := c.doGenerate(ctx, generateRequest{
+		Model:  c.generationModel,
+		Prompt: fmt.Sprintf("User still wants to: %s", input),
+		System: system,
+		Stream: false,
+	})
+	if err != nil {
+		return "", err
+	}
+	return SanitizeGenerated(resp.Response), nil
+}
+
+func trimForPrompt(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }
 
 func (c *Client) ClassifyInput(ctx context.Context, input string) (string, error) {
@@ -75,8 +180,9 @@ func (c *Client) ClassifyInput(ctx context.Context, input string) (string, error
 		Model:  c.classifierModel,
 		Prompt: input,
 		System: `Classify the following input as one of: COMMAND, NL
-COMMAND = a direct shell command the user wants to run as-is
-NL = natural language describing what the user wants to do
+COMMAND = the user is invoking a program or builtin (first word is the executable), e.g. git status, ls -la, docker ps
+NL = English describing a goal or asking a question, even if it does not use words like "please" or "show me"
+If the first word is not a real command, classify as NL.
 Respond with exactly one word: COMMAND or NL. Nothing else.`,
 		Stream: false,
 	})
@@ -190,7 +296,11 @@ func (c *Client) GenerateStream(ctx context.Context, input string, cwd string, o
 			break
 		}
 	}
-	return strings.TrimSpace(full.String()), nil
+	out := strings.TrimSpace(full.String())
+	if cwd != "" {
+		return SanitizeGenerated(out), nil
+	}
+	return out, nil
 }
 
 type ModelInfo struct {
@@ -227,6 +337,14 @@ func (c *Client) SetGenerationModel(model string) {
 
 func (c *Client) SetClassifierModel(model string) {
 	c.classifierModel = model
+}
+
+func (c *Client) SetShellHint(hint string) {
+	c.shellHint = hint
+}
+
+func (c *Client) SetAvailableBins(bins []string) {
+	c.availableBins = bins
 }
 
 func (c *Client) GenerationModel() string {

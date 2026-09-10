@@ -9,8 +9,10 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/chzyer/readline"
 	"github.com/nsh-terminal/nsh/internal/classifier"
 	"github.com/nsh-terminal/nsh/internal/config"
 	"github.com/nsh-terminal/nsh/internal/executor"
@@ -32,7 +34,7 @@ type REPL struct {
 	workflows  *workflow.Manager
 	search     *search.Handler
 	scratch    *scratch.Runner
-	recording  bool
+	recording  atomic.Bool
 	recorded   []string
 	ollamaOK   bool
 	services   *executor.ServiceRunner
@@ -52,6 +54,9 @@ func New(cfg config.Config) *REPL {
 	)
 
 	exec := executor.New(cfg.Shell.Default, cfg.Shell.WSLDistro)
+	exec.WarmPSHost()
+	ollamaClient.SetShellHint(exec.NLShellName())
+	ollamaClient.SetAvailableBins(exec.AvailableBins())
 	pathLookup := func(name string) bool {
 		return exec.PathExists(name)
 	}
@@ -75,6 +80,51 @@ func New(cfg config.Config) *REPL {
 }
 
 func (r *REPL) Run() error {
+	defer r.executor.Close()
+	defer r.stopServicesOnExit()
+	r.printWelcome()
+
+	if readline.DefaultIsTerminal() {
+		return r.runReadline()
+	}
+	return r.runScanner()
+}
+
+func (r *REPL) runReadline() error {
+	rl, err := readline.NewEx(&readline.Config{
+		Prompt:          r.promptString(),
+		HistoryFile:     filepath.Join(config.Dir(), "input.hist"),
+		AutoComplete:    nshCompleter{},
+		InterruptPrompt: "^C",
+		EOFPrompt:       "exit",
+	})
+	if err != nil {
+		return r.runScanner()
+	}
+	defer rl.Close()
+
+	for {
+		rl.SetPrompt(r.promptString())
+		line, err := rl.Readline()
+		if err == readline.ErrInterrupt {
+			continue
+		}
+		if err != nil {
+			break
+		}
+		input := strings.TrimSpace(line)
+		if input == "" {
+			continue
+		}
+		if input == "exit" || input == "quit" {
+			break
+		}
+		r.handleInput(input)
+	}
+	return nil
+}
+
+func (r *REPL) runScanner() error {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 64*1024), 64*1024)
 
@@ -82,7 +132,7 @@ func (r *REPL) Run() error {
 	signal.Notify(sigCh, os.Interrupt)
 	go func() {
 		for range sigCh {
-			if r.recording {
+			if r.recording.Load() {
 				fmt.Println("\n[nsh] Ctrl+C — recording still active. Use \"nsh record stop\" or \"nsh record cancel\".")
 			}
 			fmt.Print("\n")
@@ -90,12 +140,24 @@ func (r *REPL) Run() error {
 		}
 	}()
 
-	r.printWelcome()
-
 	for {
 		r.printPrompt()
 		if !scanner.Scan() {
-			if scanner.Err() != nil {
+			err := scanner.Err()
+			if err != nil {
+				if err == bufio.ErrTooLong {
+					fmt.Println("\n[nsh] error: input line too long")
+					// Drain the rest of the long line
+					reader := bufio.NewReader(os.Stdin)
+					for {
+						b, err := reader.ReadByte()
+						if err != nil || b == '\n' {
+							break
+						}
+					}
+				} else {
+					fmt.Printf("\n[nsh] input error: %v\n", err)
+				}
 				scanner = bufio.NewScanner(os.Stdin)
 				scanner.Buffer(make([]byte, 64*1024), 64*1024)
 				continue
@@ -116,23 +178,27 @@ func (r *REPL) Run() error {
 	return nil
 }
 
-func (r *REPL) printPrompt() {
-	cwd, _ := os.Getwd()
-	home, _ := os.UserHomeDir()
+func (r *REPL) promptString() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = ""
+	}
 	display := cwd
 	if home != "" && strings.HasPrefix(cwd, home) {
 		display = "~" + cwd[len(home):]
 	}
 
 	theme := r.cfg.UI.Theme
-	cwdColor := "\033[32m"   // green
-	promptColor := "\033[0m" // reset
-	recColor := "\033[31m"   // red
+	cwdColor := "\033[32m"
+	recColor := "\033[31m"
 	reset := "\033[0m"
 
 	if theme == "minimal" {
 		cwdColor = ""
-		promptColor = ""
 		recColor = ""
 		reset = ""
 	} else if theme == "blue" {
@@ -146,11 +212,14 @@ func (r *REPL) printPrompt() {
 	}
 
 	rec := ""
-	if r.recording {
+	if r.recording.Load() {
 		rec = recColor + "[REC]" + reset + " "
 	}
-	fmt.Printf("%s%s%s%s %s", rec, cwdColor, display, reset, r.cfg.UI.Prompt)
-	_ = promptColor
+	return fmt.Sprintf("%s%s%s%s %s", rec, cwdColor, display, reset, r.cfg.UI.Prompt)
+}
+
+func (r *REPL) printPrompt() {
+	fmt.Print(r.promptString())
 }
 
 func (r *REPL) printWelcome() {
@@ -198,7 +267,7 @@ func (r *REPL) handleInput(input string) {
 }
 
 func (r *REPL) handleCommand(input string) {
-	if r.recording {
+	if r.recording.Load() {
 		r.recorded = append(r.recorded, input)
 	}
 
@@ -254,7 +323,10 @@ func (r *REPL) handleNL(input string) {
 		return
 	}
 
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
 	ctx := context.Background()
 
 	fmt.Print("[nsh] thinking...")
@@ -268,6 +340,16 @@ func (r *REPL) handleNL(input string) {
 	if generated == "" {
 		fmt.Println("[nsh] No command generated.")
 		return
+	}
+	if ollama.LooksLikeBinDump(generated) {
+		fmt.Print("[nsh] retrying...")
+		repaired, rerr := r.ollama.RepairCommand(ctx, input, cwd, generated, "Do not list binaries. Emit one PowerShell command for the user's request.")
+		fmt.Print("\r                 \r")
+		if rerr != nil || repaired == "" || ollama.LooksLikeBinDump(repaired) {
+			fmt.Println("[nsh] Could not translate that request into a command.")
+			return
+		}
+		generated = repaired
 	}
 
 	if r.cfg.UI.ShowGeneratedCommand {
@@ -284,39 +366,107 @@ func (r *REPL) handleNL(input string) {
 		}
 	}
 
-	if r.recording {
-		r.recorded = append(r.recorded, generated)
+	ok, result := r.runGeneratedCommands(generated)
+	if ok {
+		r.recordGenerated(generated)
+		r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
+		return
 	}
 
+	if executor.LooksLikeUnknownCommand(result.Output) || result.ExitCode != 0 {
+		fmt.Print("[nsh] retrying...")
+		repaired, rerr := r.ollama.RepairCommand(ctx, input, cwd, generated, result.Output)
+		fmt.Print("\r                 \r")
+		if rerr != nil || repaired == "" || repaired == generated {
+			r.recordGenerated(generated)
+			r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
+			return
+		}
+		if r.cfg.UI.ShowGeneratedCommand {
+			fmt.Printf("\033[36m> %s\033[0m\n", repaired)
+		}
+		if r.cfg.UI.ConfirmDestructive && r.executor.IsDestructive(repaired) {
+			fmt.Print("[nsh] This looks destructive. Run it? [y/N] ")
+			var confirm string
+			fmt.Scanln(&confirm)
+			if strings.ToLower(strings.TrimSpace(confirm)) != "y" {
+				fmt.Println("[nsh] Cancelled.")
+				return
+			}
+		}
+		_, result = r.runGeneratedCommands(repaired)
+		r.recordGenerated(repaired)
+		r.saveHistory(input, "nl", repaired, result.ExitCode, result.Output, result.DurationMs)
+		return
+	}
+
+	r.recordGenerated(generated)
+	r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
+}
+
+func (r *REPL) recordGenerated(generated string) {
+	if r.recording.Load() {
+		r.recorded = append(r.recorded, generated)
+	}
+}
+
+func (r *REPL) runGeneratedCommands(generated string) (bool, executor.RunResult) {
+	var last executor.RunResult
 	commands := strings.Split(generated, "\n")
+	ran := false
 	for _, cmd := range commands {
 		cmd = strings.TrimSpace(cmd)
 		if cmd == "" {
 			continue
 		}
-		if strings.HasPrefix(cmd, "cd ") {
-			dir := strings.TrimSpace(strings.TrimPrefix(cmd, "cd "))
+		if dir, ok := parseGeneratedCd(cmd); ok {
 			expanded, err := executor.CdExpand(dir)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "[nsh] %v\n", err)
-				r.saveHistory(input, "nl", generated, 1, "", 0)
-				return
+				return false, executor.RunResult{ExitCode: 1, Output: err.Error()}
 			}
 			os.Chdir(expanded)
+			ran = true
 			continue
 		}
-		result, err := r.executor.Run(cmd)
+		result, err := r.executor.RunGenerated(cmd)
+		last = result
+		ran = true
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[nsh] execution error: %v\n", err)
-			r.saveHistory(input, "nl", generated, 1, "", 0)
-			return
+			last.ExitCode = 1
+			if last.Output == "" {
+				last.Output = err.Error()
+			}
+			return false, last
 		}
 		if result.ExitCode != 0 {
-			r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
-			return
+			return false, result
 		}
-		r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
 	}
+	if !ran {
+		return true, executor.RunResult{}
+	}
+	return last.ExitCode == 0, last
+}
+
+func parseGeneratedCd(cmd string) (string, bool) {
+	trim := strings.TrimSpace(cmd)
+	lower := strings.ToLower(trim)
+	prefixes := []string{"cd ", "chdir ", "set-location "}
+	for _, p := range prefixes {
+		if strings.HasPrefix(lower, p) {
+			rest := strings.TrimSpace(trim[len(p):])
+			rest = strings.TrimPrefix(rest, "-Path ")
+			rest = strings.TrimPrefix(rest, "-LiteralPath ")
+			rest = strings.Trim(rest, `"'`)
+			if rest == "" || strings.HasPrefix(rest, "-") {
+				return "", false
+			}
+			return rest, true
+		}
+	}
+	return "", false
 }
 
 func (r *REPL) handleSearch(engine, query string) {
@@ -537,7 +687,23 @@ func (r *REPL) handleAmbiguous(input string) {
 	}
 
 	if classification == "COMMAND" {
-		r.handleCommand(input)
+		fields := strings.Fields(input)
+		first := ""
+		if len(fields) > 0 {
+			first = strings.ToLower(fields[0])
+		}
+		hasFlag := false
+		for _, f := range fields {
+			if strings.HasPrefix(f, "-") {
+				hasFlag = true
+				break
+			}
+		}
+		if hasFlag || (first != "" && r.executor.PathExists(first)) {
+			r.handleCommand(input)
+			return
+		}
+		r.handleNL(input)
 		return
 	}
 
@@ -565,15 +731,15 @@ func (r *REPL) handleRecord(args []string) {
 	}
 	switch args[0] {
 	case "start":
-		r.recording = true
+		r.recording.Store(true)
 		r.recorded = nil
 		fmt.Println("[nsh] Recording started. Run your commands, then: nsh record stop \"name\"")
 	case "stop":
-		if !r.recording {
+		if !r.recording.Load() {
 			fmt.Println("[nsh] Not currently recording.")
 			return
 		}
-		r.recording = false
+		r.recording.Store(false)
 		if len(args) < 2 {
 			fmt.Println("[nsh] Usage: nsh record stop \"name\"")
 			r.recorded = nil
@@ -588,11 +754,11 @@ func (r *REPL) handleRecord(args []string) {
 		fmt.Printf("[nsh] Workflow %q saved (%d commands)\n", name, len(r.recorded))
 		r.recorded = nil
 	case "cancel":
-		if !r.recording {
+		if !r.recording.Load() {
 			fmt.Println("[nsh] Not currently recording.")
 			return
 		}
-		r.recording = false
+		r.recording.Store(false)
 		r.recorded = nil
 		fmt.Println("[nsh] Recording cancelled.")
 	default:
@@ -860,6 +1026,20 @@ func (r *REPL) handleDown() {
 	fmt.Println("[nsh] All services stopped.")
 }
 
+func (r *REPL) stopServicesOnExit() {
+	if r.services == nil {
+		return
+	}
+	running := r.services.Running()
+	if len(running) == 0 {
+		return
+	}
+	fmt.Printf("\n[nsh] Shutting down %d services: %s\n", len(running), strings.Join(running, ", "))
+	r.services.StopAll()
+	r.services = nil
+	fmt.Println("[nsh] All services stopped.")
+}
+
 func (r *REPL) handleStatus() {
 	if r.services == nil {
 		fmt.Println("[nsh] No services running.")
@@ -1071,6 +1251,7 @@ Developed by Sanchit
 
 Usage:
   Type commands normally, or use plain English.
+  Tab completes paths, builtins, and nsh subcommands.
   Built-in commands (ls, cat, grep, find, etc.) run natively — no shell needed.
   Mention a Python library (pandas, matplotlib, etc.) and nsh auto-generates
   a script, installs deps, and runs it.

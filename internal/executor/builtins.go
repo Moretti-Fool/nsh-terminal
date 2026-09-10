@@ -222,17 +222,24 @@ func builtinCat(tokens []string) (RunResult, bool) {
 		if strings.HasPrefix(path, "-") {
 			continue
 		}
-		data, err := os.ReadFile(path)
+		err := func() error {
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			_, err = io.Copy(os.Stdout, f)
+			return err
+		}()
+
 		if err != nil {
 			msg := fmt.Sprintf("cat: %s: %v\n", path, err)
 			fmt.Fprint(os.Stderr, msg)
 			buf.WriteString(msg)
 			exitCode = 1
-			continue
+		} else {
+			buf.WriteString(fmt.Sprintf("[cat %s output streamed]\n", path))
 		}
-		content := string(data)
-		fmt.Print(content)
-		buf.WriteString(content)
 	}
 	return RunResult{Output: buf.String(), ExitCode: exitCode, DurationMs: time.Since(start).Milliseconds()}, true
 }
@@ -255,25 +262,31 @@ func builtinHead(tokens []string) (RunResult, bool) {
 
 	var buf strings.Builder
 	for _, path := range files {
-		f, err := os.Open(path)
+		err := func() error {
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+
+			if len(files) > 1 {
+				header := fmt.Sprintf("==> %s <==\n", path)
+				fmt.Print(header)
+				buf.WriteString(header)
+			}
+			scanner := bufio.NewScanner(f)
+			for i := 0; i < n && scanner.Scan(); i++ {
+				line := scanner.Text() + "\n"
+				fmt.Print(line)
+				buf.WriteString(line)
+			}
+			return scanner.Err()
+		}()
 		if err != nil {
 			msg := fmt.Sprintf("head: %s: %v\n", path, err)
 			fmt.Fprint(os.Stderr, msg)
 			buf.WriteString(msg)
-			continue
 		}
-		if len(files) > 1 {
-			header := fmt.Sprintf("==> %s <==\n", path)
-			fmt.Print(header)
-			buf.WriteString(header)
-		}
-		scanner := bufio.NewScanner(f)
-		for i := 0; i < n && scanner.Scan(); i++ {
-			line := scanner.Text() + "\n"
-			fmt.Print(line)
-			buf.WriteString(line)
-		}
-		f.Close()
 	}
 	return RunResult{Output: buf.String(), DurationMs: time.Since(start).Milliseconds()}, true
 }
@@ -296,34 +309,41 @@ func builtinTail(tokens []string) (RunResult, bool) {
 
 	var buf strings.Builder
 	for _, path := range files {
-		data, err := os.ReadFile(path)
+		err := func() error {
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+
+			if len(files) > 1 {
+				header := fmt.Sprintf("==> %s <==\n", path)
+				fmt.Print(header)
+				buf.WriteString(header)
+			}
+
+			// Simple ring buffer for tail
+			lines := make([]string, 0, n)
+			scanner := bufio.NewScanner(f)
+			for scanner.Scan() {
+				if len(lines) >= n {
+					lines = append(lines[1:], scanner.Text())
+				} else {
+					lines = append(lines, scanner.Text())
+				}
+			}
+
+			for _, line := range lines {
+				out := line + "\n"
+				fmt.Print(out)
+				buf.WriteString(out)
+			}
+			return scanner.Err()
+		}()
 		if err != nil {
 			msg := fmt.Sprintf("tail: %s: %v\n", path, err)
 			fmt.Fprint(os.Stderr, msg)
 			buf.WriteString(msg)
-			continue
-		}
-		if len(files) > 1 {
-			header := fmt.Sprintf("==> %s <==\n", path)
-			fmt.Print(header)
-			buf.WriteString(header)
-		}
-		lines := strings.Split(string(data), "\n")
-		if len(lines) > 0 && lines[len(lines)-1] == "" {
-			lines = lines[:len(lines)-1]
-		}
-		startIdx := len(lines) - n
-		if startIdx < 0 {
-			startIdx = 0
-		}
-		for _, line := range lines[startIdx:] {
-			out := line + "\n"
-			fmt.Print(out)
-			buf.WriteString(out)
-		}
-		f, _ := os.Open(path)
-		if f != nil {
-			f.Close()
 		}
 	}
 	return RunResult{Output: buf.String(), DurationMs: time.Since(start).Milliseconds()}, true
@@ -340,20 +360,35 @@ func builtinWc(tokens []string) (RunResult, bool) {
 		if strings.HasPrefix(path, "-") {
 			continue
 		}
-		data, err := os.ReadFile(path)
+		
+		err := func() error {
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+
+			var lines, words, chars int
+			scanner := bufio.NewScanner(f)
+			// Using custom split to count words and lines while reading
+			for scanner.Scan() {
+				text := scanner.Text()
+				lines++
+				words += len(strings.Fields(text))
+				chars += len(text) + 1 // +1 for the newline
+			}
+
+			line := fmt.Sprintf("%8d %8d %8d %s\n", lines, words, chars, path)
+			fmt.Print(line)
+			buf.WriteString(line)
+			return scanner.Err()
+		}()
+		
 		if err != nil {
 			msg := fmt.Sprintf("wc: %s: %v\n", path, err)
 			fmt.Fprint(os.Stderr, msg)
 			buf.WriteString(msg)
-			continue
 		}
-		content := string(data)
-		lines := strings.Count(content, "\n")
-		words := len(strings.Fields(content))
-		chars := len(data)
-		line := fmt.Sprintf("%8d %8d %8d %s\n", lines, words, chars, path)
-		fmt.Print(line)
-		buf.WriteString(line)
 	}
 	return RunResult{Output: buf.String(), DurationMs: time.Since(start).Milliseconds()}, true
 }
@@ -542,6 +577,13 @@ func builtinRm(tokens []string) (RunResult, bool) {
 	}
 	exitCode := 0
 	for _, p := range paths {
+		clean := filepath.Clean(p)
+		if clean == "." || clean == ".." || clean == "/" || clean == "\\" || (len(clean) == 3 && clean[1] == ':' && clean[2] == '\\') {
+			fmt.Fprintf(os.Stderr, "rm: refusing to remove %q\n", p)
+			exitCode = 1
+			continue
+		}
+
 		info, err := os.Stat(p)
 		if err != nil {
 			if !force {

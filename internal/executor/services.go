@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 type ServiceDef struct {
@@ -95,42 +96,79 @@ func (sr *ServiceRunner) LaunchAll(services []ServiceDef) error {
 		cmd.Dir = absDir
 		cmd.Env = os.Environ()
 
+		// Detach stdin so services don't compete with the REPL for input.
+		devNull, err := os.Open(os.DevNull)
+		if err == nil {
+			cmd.Stdin = devNull
+		}
+
+		// Isolate the service into its own process group so that console
+		// signals (Ctrl+C, CTRL_CLOSE_EVENT, system-generated events) sent
+		// to the nsh console do NOT propagate to the services.
+		setServiceProcessGroup(cmd)
+
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s[error] stdout pipe: %s\n", prefix, err)
+			if devNull != nil {
+				devNull.Close()
+			}
 			continue
 		}
 		stderr, err := cmd.StderrPipe()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s[error] stderr pipe: %s\n", prefix, err)
+			if devNull != nil {
+				devNull.Close()
+			}
 			continue
+		}
+
+		if err := cmd.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "%s[error] start failed: %s\n", prefix, err)
+			if devNull != nil {
+				devNull.Close()
+			}
+			continue
+		}
+
+		// Close devNull in the parent — the child has its own handle now.
+		if devNull != nil {
+			devNull.Close()
 		}
 
 		done := make(chan struct{})
 		sp := &ServiceProcess{Name: svc.Name, Cmd: cmd, Done: done}
 
+		// Pipe reader goroutines must complete BEFORE cmd.Wait() is called.
+		// Go's cmd.Wait() closes the pipe fds, so reading after Wait() causes
+		// a "file already closed" error. We use a WaitGroup to synchronise.
+		var pipeWg sync.WaitGroup
+		pipeWg.Add(2)
+
 		go func(p string) {
+			defer pipeWg.Done()
 			scanner := bufio.NewScanner(stdout)
+			scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 			for scanner.Scan() {
 				fmt.Printf("%s%s\n", p, scanner.Text())
 			}
 		}(prefix)
 
 		go func(p string) {
+			defer pipeWg.Done()
 			scanner := bufio.NewScanner(stderr)
+			scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 			for scanner.Scan() {
 				fmt.Printf("%s%s\n", p, scanner.Text())
 			}
 		}(prefix)
-
-		if err := cmd.Start(); err != nil {
-			fmt.Fprintf(os.Stderr, "%s[error] start failed: %s\n", prefix, err)
-			continue
-		}
 
 		fmt.Printf("%s[started] %s\n", prefix, svc.Command)
 
 		go func(c *exec.Cmd, d chan struct{}, p string, name string) {
+			// Wait for pipe readers to drain before calling Wait().
+			pipeWg.Wait()
 			err := c.Wait()
 			if err != nil {
 				fmt.Printf("%s[exited] %v\n", p, err)
@@ -159,20 +197,58 @@ func (sr *ServiceRunner) Wait() {
 	}
 }
 
+// StopAll sends a graceful shutdown signal first, then force-kills after a
+// timeout.  On Windows this sends CTRL_BREAK_EVENT to the service's own
+// process group, giving it a chance to clean up, then falls back to taskkill.
+// On Unix it sends SIGTERM first, then SIGKILL.
 func (sr *ServiceRunner) StopAll() {
 	sr.mu.Lock()
 	procs := make([]*ServiceProcess, len(sr.processes))
 	copy(procs, sr.processes)
 	sr.mu.Unlock()
 
+	// Phase 1: graceful shutdown.
 	for _, p := range procs {
-		if p.Cmd.Process != nil {
-			if runtime.GOOS == "windows" {
-				exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprintf("%d", p.Cmd.Process.Pid)).Run()
-			} else {
-				p.Cmd.Process.Kill()
-			}
+		select {
+		case <-p.Done:
+			continue // already exited
+		default:
 		}
+		if p.Cmd.Process != nil {
+			gracefulStopService(p.Cmd)
+		}
+	}
+
+	// Phase 2: wait up to 5 seconds for clean exit.
+	allDone := make(chan struct{})
+	go func() {
+		for _, p := range procs {
+			<-p.Done
+		}
+		close(allDone)
+	}()
+
+	select {
+	case <-allDone:
+		return
+	case <-time.After(5 * time.Second):
+	}
+
+	// Phase 3: force kill anything still alive.
+	for _, p := range procs {
+		select {
+		case <-p.Done:
+			continue
+		default:
+		}
+		if p.Cmd.Process != nil {
+			forceKillService(p.Cmd)
+		}
+	}
+
+	// Wait for all done channels so goroutines finish.
+	for _, p := range procs {
+		<-p.Done
 	}
 }
 

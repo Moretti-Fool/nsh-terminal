@@ -2,3 +2,8 @@ nsh
 nsh.exe
 dist/
 *.test
+docs/
+.claude
+*.csv
+*.zip
+*.txt

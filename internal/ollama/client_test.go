@@ -13,12 +13,41 @@ import (
 
 func TestBuildSystemPrompt(t *testing.T) {
 	c := New("http://localhost:11434", "phi3", "llama3.2", 10*time.Second)
+	c.SetShellHint("powershell")
+	c.SetAvailableBins([]string{"ipconfig", "git"})
 	prompt := c.BuildSystemPrompt("/home/user/project")
 	if !strings.Contains(prompt, runtime.GOOS) {
 		t.Error("should contain OS")
 	}
 	if !strings.Contains(prompt, "/home/user/project") {
 		t.Error("should contain CWD")
+	}
+	if !strings.Contains(prompt, "powershell") {
+		t.Error("should contain shell")
+	}
+	if !strings.Contains(prompt, "ipconfig") {
+		t.Error("should contain available bins")
+	}
+	if !strings.Contains(prompt, "Get-ChildItem") {
+		t.Error("should mention PowerShell cmdlets")
+	}
+}
+
+func TestSanitizeGenerated(t *testing.T) {
+	in := "```powershell\nGet-ChildItem\n```"
+	got := SanitizeGenerated(in)
+	if got != "Get-ChildItem" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestLooksLikeBinDump(t *testing.T) {
+	dump := "ipconfig\nnetstat\ntaskkill\ntasklist\nsc\nnet\nping"
+	if !LooksLikeBinDump(dump) {
+		t.Fatal("expected dump")
+	}
+	if LooksLikeBinDump("Get-ChildItem | Sort-Object Length") {
+		t.Fatal("command is not a dump")
 	}
 }
 

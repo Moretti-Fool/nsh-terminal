@@ -48,8 +48,11 @@ func (m *Manager) Save(wf Workflow) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return toml.NewEncoder(f).Encode(wf)
+	err = toml.NewEncoder(f).Encode(wf)
+	if cerr := f.Close(); cerr != nil && err == nil {
+		return cerr
+	}
+	return err
 }
 
 func (m *Manager) Load(name string) (Workflow, error) {
