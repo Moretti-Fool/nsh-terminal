@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/chzyer/readline"
 )
 
 var pythonSignals = []string{
@@ -225,12 +227,28 @@ func (r *Runner) InstallMissing(packages []string) error {
 	}
 
 	fmt.Printf("\n[nsh] The script requires missing pip packages: %s\n", strings.Join(toInstall, ", "))
-	fmt.Print("[nsh] Auto-install them? [Y/n] ")
-	var confirm string
-	fmt.Scanln(&confirm)
-	confirm = strings.ToLower(strings.TrimSpace(confirm))
-	if confirm != "" && confirm != "y" && confirm != "yes" {
-		return fmt.Errorf("pip install cancelled by user")
+	
+	rl, err := readline.New("[nsh] Auto-install them? [Y/n] ")
+	if err == nil {
+		defer rl.Close()
+		confirm, err := rl.Readline()
+		if err == nil {
+			confirm = strings.ToLower(strings.TrimSpace(confirm))
+			if confirm != "" && confirm != "y" && confirm != "yes" {
+				return fmt.Errorf("pip install cancelled by user")
+			}
+		} else {
+			return fmt.Errorf("pip install cancelled")
+		}
+	} else {
+		// Fallback
+		fmt.Print("[nsh] Auto-install them? [Y/n] ")
+		var confirm string
+		fmt.Scanln(&confirm)
+		confirm = strings.ToLower(strings.TrimSpace(confirm))
+		if confirm != "" && confirm != "y" && confirm != "yes" {
+			return fmt.Errorf("pip install cancelled by user")
+		}
 	}
 
 	fmt.Printf("[nsh] Installing: %s\n", strings.Join(toInstall, ", "))
@@ -238,7 +256,7 @@ func (r *Runner) InstallMissing(packages []string) error {
 	cmd := exec.Command(r.pipPath(), args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	err := cmd.Run()
+	err = cmd.Run()
 	if err == nil {
 		for _, pkg := range toInstall {
 			r.installed[strings.ToLower(pkg)] = true

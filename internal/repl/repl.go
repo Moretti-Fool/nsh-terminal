@@ -178,6 +178,16 @@ func (r *REPL) runScanner() error {
 	return nil
 }
 
+func getGitBranch(cwd string) string {
+	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 func (r *REPL) promptString() string {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -190,6 +200,11 @@ func (r *REPL) promptString() string {
 	display := cwd
 	if home != "" && strings.HasPrefix(cwd, home) {
 		display = "~" + cwd[len(home):]
+	}
+
+	branch := getGitBranch(cwd)
+	if branch != "" {
+		display = fmt.Sprintf("%s \033[90mgit:(%s)\033[0m", display, branch)
 	}
 
 	theme := r.cfg.UI.Theme
@@ -357,12 +372,22 @@ func (r *REPL) handleNL(input string) {
 	}
 
 	if r.cfg.UI.ConfirmDestructive && r.executor.IsDestructive(generated) {
-		fmt.Print("[nsh] This looks destructive. Run it? [y/N] ")
-		var confirm string
-		fmt.Scanln(&confirm)
-		if strings.ToLower(strings.TrimSpace(confirm)) != "y" {
-			fmt.Println("[nsh] Cancelled.")
-			return
+		rl, err := readline.New("[nsh] This looks destructive. Run it? [y/N] ")
+		if err == nil {
+			defer rl.Close()
+			confirm, err := rl.Readline()
+			if err != nil || strings.ToLower(strings.TrimSpace(confirm)) != "y" {
+				fmt.Println("[nsh] Cancelled.")
+				return
+			}
+		} else {
+			fmt.Print("[nsh] This looks destructive. Run it? [y/N] ")
+			var confirm string
+			fmt.Scanln(&confirm)
+			if strings.ToLower(strings.TrimSpace(confirm)) != "y" {
+				fmt.Println("[nsh] Cancelled.")
+				return
+			}
 		}
 	}
 
@@ -505,15 +530,27 @@ func (r *REPL) searchAISummary(query string) {
 	fmt.Print("[nsh] thinking...")
 
 	prompt := fmt.Sprintf("Answer this question concisely in 3-5 sentences: %s", query)
-	answer, err := r.ollama.GenerateStream(ctx, prompt, "", func(token string) {})
-	fmt.Print("\r              \r")
+	firstToken := true
+	
+	answer, err := r.ollama.GenerateStream(ctx, prompt, "", func(token string) {
+		if firstToken {
+			fmt.Print("\r                 \r\033[36m")
+			firstToken = false
+		}
+		fmt.Print(token)
+	})
+	
+	if firstToken {
+		fmt.Print("\r                 \r")
+	} else {
+		fmt.Println("\033[0m")
+	}
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[nsh] AI error: %v\n", err)
 		return
 	}
 
-	fmt.Println("\033[36m" + answer + "\033[0m")
 	fmt.Println()
 	r.saveHistory("ask "+query, "ask", answer, 0, "", 0)
 }
