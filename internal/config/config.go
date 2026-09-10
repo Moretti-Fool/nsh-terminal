@@ -27,6 +27,7 @@ type OllamaConfig struct {
 	ClassifierModel string `toml:"classifier_model"`
 	GenerationModel string `toml:"generation_model"`
 	TimeoutMs       int    `toml:"timeout_ms"`
+	MaxRetries      int    `toml:"max_retries"`
 }
 
 type ShellConfig struct {
@@ -62,6 +63,7 @@ func Default() Config {
 			ClassifierModel: "qwen2.5-coder:7b",
 			GenerationModel: "qwen2.5-coder:7b",
 			TimeoutMs:       45000,
+			MaxRetries:      3,
 		},
 		Shell: ShellConfig{
 			Default:   "auto",

@@ -128,6 +128,42 @@ func translatorTools() []chatTool {
 				Parameters:  emptyObj,
 			},
 		},
+		{
+			Type: "function",
+			Function: chatToolSchema{
+				Name:        "netstat",
+				Description: "Show listening TCP ports with their owning process IDs. Use when the request involves ports or network connections.",
+				Parameters:  emptyObj,
+			},
+		},
+		{
+			Type: "function",
+			Function: chatToolSchema{
+				Name:        "env_var",
+				Description: "Read the value of an environment variable.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"name": map[string]any{"type": "string"},
+					},
+					"required": []string{"name"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: chatToolSchema{
+				Name:        "read_file_head",
+				Description: "Read the first 20 lines of a file to inspect its contents.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path": map[string]any{"type": "string"},
+					},
+					"required": []string{"path"},
+				},
+			},
+		},
 	}
 }
 
@@ -163,7 +199,7 @@ func (c *Client) Translate(ctx context.Context, req TranslateRequest) (Plan, []C
 
 	if len(resp.Message.ToolCalls) > 0 && req.RunTool != nil {
 		for i, tc := range resp.Message.ToolCalls {
-			if i >= 3 {
+			if i >= 5 {
 				break
 			}
 			out := req.RunTool(tc.Function.Name, tc.Function.ArgsMap())
@@ -205,7 +241,7 @@ func (c *Client) Repair(ctx context.Context, msgs []ChatMessage, reason string) 
 	}
 	msgs = append(msgs, ChatMessage{
 		Role: "user",
-		Content: "The previous command was not usable.\n" + trimForPrompt(reason, 800) +
+		Content: "The previous command failed with this error:\n" + trimForPrompt(reason, 800) +
 			"\nEmit a corrected JSON plan for the original request. Same OS and shell.",
 	})
 	resp, err := c.doChat(ctx, msgs, nil, CommandFormat)

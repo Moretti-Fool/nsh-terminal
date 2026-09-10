@@ -1,11 +1,13 @@
 package ground
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -101,6 +103,54 @@ func ExecTool(name string, args map[string]any, cwd string, pathExists func(stri
 			return "(clean working tree)"
 		}
 		return trimRunes(s, 1500)
+	case "netstat":
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", "Get-NetTCPConnection -State Listen | Select-Object -Property LocalAddress,LocalPort,OwningProcess | ConvertTo-Json")
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		if err := cmd.Run(); err != nil {
+			return trimRunes(strings.TrimSpace(out.String()+"\n"+err.Error()), 2000)
+		}
+		return trimRunes(strings.TrimSpace(out.String()), 2000)
+	case "env_var":
+		name := argString(args, "name")
+		if name == "" {
+			return "missing argument: name"
+		}
+		if val, ok := os.LookupEnv(name); ok {
+			if val == "" {
+				// Just return empty if actually set to empty
+				return val
+			}
+			return val
+		}
+		return "(not set)"
+	case "read_file_head":
+		path := argString(args, "path")
+		if path == "" {
+			return "missing argument: path"
+		}
+		fullPath := path
+		if !filepath.IsAbs(path) {
+			fullPath = filepath.Join(cwd, path)
+		}
+		f, err := os.Open(fullPath)
+		if err != nil {
+			return err.Error()
+		}
+		defer f.Close()
+		scanner := bufio.NewScanner(f)
+		var b strings.Builder
+		for i := 0; i < 20 && scanner.Scan(); i++ {
+			b.WriteString(scanner.Text())
+			b.WriteString("\n")
+		}
+		if err := scanner.Err(); err != nil {
+			b.WriteString(err.Error())
+		}
+		return trimRunes(strings.TrimSpace(b.String()), 2000)
 	default:
 		return "unknown tool: " + name
 	}
