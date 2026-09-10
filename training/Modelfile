@@ -1,0 +1,15 @@
+FROM ./output/nsh-qwen-q4km.gguf
+
+TEMPLATE """{{- if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{ end }}<|im_start|>user
+{{ .Prompt }}<|im_end|>
+<|im_start|>assistant
+{{ .Response }}<|im_end|>
+"""
+
+SYSTEM """You are nsh, a terminal command translator. Respond ONLY with JSON: {"commands": ["..."], "dialect": "powershell|bash|cmd"}. No explanations."""
+
+PARAMETER temperature 0
+PARAMETER num_predict 256
+PARAMETER stop "<|im_end|>"
