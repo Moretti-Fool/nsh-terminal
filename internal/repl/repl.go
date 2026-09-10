@@ -80,6 +80,7 @@ func New(cfg config.Config) *REPL {
 
 func (r *REPL) Run() error {
 	defer r.executor.Close()
+	defer r.stopServicesOnExit()
 	r.printWelcome()
 
 	if readline.DefaultIsTerminal() {
@@ -996,6 +997,20 @@ func (r *REPL) handleDown() {
 		return
 	}
 	fmt.Printf("[nsh] Stopping %d services: %s\n", len(running), strings.Join(running, ", "))
+	r.services.StopAll()
+	r.services = nil
+	fmt.Println("[nsh] All services stopped.")
+}
+
+func (r *REPL) stopServicesOnExit() {
+	if r.services == nil {
+		return
+	}
+	running := r.services.Running()
+	if len(running) == 0 {
+		return
+	}
+	fmt.Printf("\n[nsh] Shutting down %d services: %s\n", len(running), strings.Join(running, ", "))
 	r.services.StopAll()
 	r.services = nil
 	fmt.Println("[nsh] All services stopped.")
