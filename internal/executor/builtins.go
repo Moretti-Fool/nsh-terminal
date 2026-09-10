@@ -512,13 +512,13 @@ func copyFile(src, dst string) error {
 }
 
 func copyDir(src, dst string) error {
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		rel, _ := filepath.Rel(src, path)
 		target := filepath.Join(dst, rel)
-		if info.IsDir() {
+		if d.IsDir() {
 			return os.MkdirAll(target, 0755)
 		}
 		return copyFile(path, target)
@@ -820,7 +820,7 @@ func builtinFind(tokens []string) (RunResult, bool) {
 	count := 0
 	maxResults := 50
 
-	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -830,7 +830,7 @@ func builtinFind(tokens []string) (RunResult, bool) {
 
 		base := filepath.Base(path)
 		if strings.HasPrefix(base, ".") && path != dir && path != "." {
-			if info.IsDir() {
+			if d.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
@@ -840,10 +840,10 @@ func builtinFind(tokens []string) (RunResult, bool) {
 			return nil
 		}
 
-		if typeFilter == "f" && info.IsDir() {
+		if typeFilter == "f" && d.IsDir() {
 			return nil
 		}
-		if typeFilter == "d" && !info.IsDir() {
+		if typeFilter == "d" && !d.IsDir() {
 			return nil
 		}
 
@@ -958,7 +958,7 @@ func builtinFindContent(dir string, keywords []string, start time.Time) (RunResu
 
 	lastFile := ""
 
-	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -968,13 +968,18 @@ func builtinFindContent(dir string, keywords []string, start time.Time) (RunResu
 
 		base := filepath.Base(path)
 		if strings.HasPrefix(base, ".") && path != dir && path != "." {
-			if info.IsDir() {
+			if d.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
-		if info.IsDir() || info.Size() == 0 || info.Size() > maxFileSize {
+		if d.IsDir() {
+			return nil
+		}
+
+		info, err := d.Info()
+		if err != nil || info.Size() == 0 || info.Size() > maxFileSize {
 			return nil
 		}
 
