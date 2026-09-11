@@ -38,15 +38,15 @@ function Write-NshDone([string]$Id, [int]$Code) {
 
 while ($true) {
   if (-not $inbox) { break }
-  if (-not (Test-Path -LiteralPath $inbox)) {
-    Start-Sleep -Milliseconds 15
+  if (-not [System.IO.File]::Exists($inbox)) {
+    Start-Sleep -Milliseconds 50
     continue
   }
   try {
-    $line = [IO.File]::ReadAllText($inbox)
-    [IO.File]::Delete($inbox)
+    $line = [System.IO.File]::ReadAllText($inbox)
+    [System.IO.File]::Delete($inbox)
   } catch {
-    Start-Sleep -Milliseconds 15
+    Start-Sleep -Milliseconds 20
     continue
   }
   $line = $line.Trim()

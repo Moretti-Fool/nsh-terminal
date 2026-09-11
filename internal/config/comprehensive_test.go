@@ -19,8 +19,8 @@ func TestComprehensiveConfig(t *testing.T) {
 			want interface{}
 		}{
 			{"Ollama.URL", cfg.Ollama.URL, "http://localhost:11434"},
-			{"Ollama.ClassifierModel", cfg.Ollama.ClassifierModel, "qwen2.5-coder:7b"},
-			{"Ollama.GenerationModel", cfg.Ollama.GenerationModel, "qwen2.5-coder:7b"},
+			{"Ollama.ClassifierModel", cfg.Ollama.ClassifierModel, "nsh-local"},
+			{"Ollama.GenerationModel", cfg.Ollama.GenerationModel, "nsh-local"},
 			{"Ollama.TimeoutMs", cfg.Ollama.TimeoutMs, 45000},
 			{"Shell.Default", cfg.Shell.Default, "auto"},
 			{"Shell.WSLDistro", cfg.Shell.WSLDistro, ""},

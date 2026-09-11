@@ -239,6 +239,16 @@ func (e *Executor) Run(command string) (RunResult, error) {
 	return e.runDirect(command)
 }
 
+func (e *Executor) IsBuiltin(name string) bool {
+	switch strings.ToLower(name) {
+	case "ls", "dir", "cat", "type", "head", "tail", "wc", "touch",
+		"mkdir", "cp", "copy", "mv", "move", "rm", "del", "echo",
+		"find", "grep", "pwd", "clear", "cls", "which", "where":
+		return true
+	}
+	return false
+}
+
 func (e *Executor) TryBuiltin(command string) (RunResult, bool) {
 	tokens := tokenize(command)
 	if len(tokens) == 0 {

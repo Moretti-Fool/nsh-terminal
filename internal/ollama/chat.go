@@ -174,6 +174,14 @@ func genOptions() map[string]any {
 	}
 }
 
+func modelSupportsTools(model string) bool {
+	lower := strings.ToLower(model)
+	if strings.Contains(lower, "nsh-local") || strings.Contains(lower, "nsh-qwen") || strings.HasPrefix(lower, "nsh-") {
+		return false
+	}
+	return true
+}
+
 // Translate turns English into shell commands using chat, JSON schema, and at most one tool round.
 func (c *Client) Translate(ctx context.Context, req TranslateRequest) (Plan, []ChatMessage, error) {
 	if req.Env.Shell == "" {
@@ -187,13 +195,19 @@ func (c *Client) Translate(ctx context.Context, req TranslateRequest) (Plan, []C
 	}
 
 	var tools []chatTool
-	if req.RunTool != nil {
+	if req.RunTool != nil && modelSupportsTools(c.generationModel) {
 		tools = translatorTools()
 	}
 
 	resp, err := c.doChat(ctx, msgs, tools, CommandFormat)
 	if err != nil {
-		return Plan{}, msgs, err
+		if len(tools) > 0 && strings.Contains(err.Error(), "does not support tools") {
+			tools = nil
+			resp, err = c.doChat(ctx, msgs, nil, CommandFormat)
+		}
+		if err != nil {
+			return Plan{}, msgs, err
+		}
 	}
 	msgs = append(msgs, resp.Message)
 
@@ -329,6 +343,11 @@ func (c *Client) buildTranslatorPrompt(env Env, examples []FewShot) string {
 		}
 	}
 
+	toolInstruction := ""
+	if modelSupportsTools(c.generationModel) {
+		toolInstruction = "\nYou may call list_cwd, which, or git_status at most once if you need facts from this machine, then emit the JSON plan."
+	}
+
 	return fmt.Sprintf(`You are nsh, a terminal command translator.
 OS: %s
 Shell: %s
@@ -336,10 +355,9 @@ CWD: %s%s
 %s
 Respond with JSON only: {"commands":["..."],"dialect":"%s"}
 dialect must be exactly %s.
-At most 3 commands. No markdown. No explanations.
-You may call list_cwd, which, or git_status at most once if you need facts from this machine, then emit the JSON plan.
+At most 3 commands. No markdown. No explanations.%s
 Do not invent filenames that are not in the listing or tool results.
-%s`, runtime.GOOS, shell, env.CWD, present, shellNote, NormalizeShell(shell), NormalizeShell(shell), ex.String())
+%s`, runtime.GOOS, shell, env.CWD, present, shellNote, NormalizeShell(shell), NormalizeShell(shell), toolInstruction, ex.String())
 }
 
 func translatorShellNote(shell string) string {

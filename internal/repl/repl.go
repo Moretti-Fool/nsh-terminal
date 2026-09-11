@@ -59,7 +59,7 @@ func New(cfg config.Config) *REPL {
 	ollamaClient.SetShellHint(exec.NLShellName())
 	ollamaClient.SetAvailableBins(exec.AvailableBins())
 	pathLookup := func(name string) bool {
-		return exec.PathExists(name)
+		return exec.PathExists(name) || exec.IsBuiltin(name) || strings.EqualFold(name, "cd")
 	}
 
 	hist := history.New(histDir, cfg.History.OutputPreviewChars)
@@ -92,13 +92,17 @@ func (r *REPL) Run() error {
 }
 
 func (r *REPL) runReadline() error {
-	rl, err := readline.NewEx(&readline.Config{
+	cfg := &readline.Config{
 		Prompt:          r.promptString(),
 		HistoryFile:     filepath.Join(config.Dir(), "input.hist"),
 		AutoComplete:    nshCompleter{},
 		InterruptPrompt: "^C",
 		EOFPrompt:       "exit",
-	})
+	}
+	if cr := newConsoleReader(); cr != nil {
+		cfg.Stdin = cr
+	}
+	rl, err := readline.NewEx(cfg)
 	if err != nil {
 		return r.runScanner()
 	}
@@ -721,7 +725,7 @@ func (r *REPL) handleAmbiguous(input string) {
 				break
 			}
 		}
-		if hasFlag || (first != "" && r.executor.PathExists(first)) {
+		if hasFlag || (first != "" && (r.executor.PathExists(first) || r.executor.IsBuiltin(first) || strings.EqualFold(first, "cd"))) {
 			r.handleCommand(input)
 			return
 		}
@@ -1256,6 +1260,11 @@ func (r *REPL) autoDetectModel() {
 	genModel := r.ollama.GenerationModel()
 	picked := ollama.PickGenerationModel(genModel, models)
 	if picked == "" || picked == genModel {
+		return
+	}
+	if strings.TrimSuffix(picked, ":latest") == strings.TrimSuffix(genModel, ":latest") {
+		r.ollama.SetGenerationModel(picked)
+		r.ollama.SetClassifierModel(picked)
 		return
 	}
 	r.ollama.SetGenerationModel(picked)
