@@ -210,8 +210,8 @@ Config file location:
 ```toml
 [ollama]
 url = "http://localhost:11434"
-classifier_model = "phi3"
-generation_model = "llama3.2:3b"
+classifier_model = "nsh-local"
+generation_model = "nsh-local"
 timeout_ms = 10000
 
 [shell]

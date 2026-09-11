@@ -60,8 +60,8 @@ func Default() Config {
 	return Config{
 		Ollama: OllamaConfig{
 			URL:             "http://localhost:11434",
-			ClassifierModel: "qwen2.5-coder:7b",
-			GenerationModel: "qwen2.5-coder:7b",
+			ClassifierModel: "nsh-local",
+			GenerationModel: "nsh-local",
 			TimeoutMs:       45000,
 			MaxRetries:      3,
 		},
