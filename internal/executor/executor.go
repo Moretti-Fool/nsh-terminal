@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"bytes"
 	"fmt"
 	"io"
@@ -482,6 +483,51 @@ func (e *Executor) RunSilent(command string) (RunResult, error) {
 	}
 
 	return RunResult{Output: string(output), ExitCode: exitCode, DurationMs: duration}, err
+}
+
+// RunInvestigate executes a command silently for agent investigation.
+// Output is captured and returned but NOT displayed to the user.
+// On Windows, runs via a one-shot PowerShell process (not the warm host,
+// which streams to stdout). Includes a 10-second timeout.
+func (e *Executor) RunInvestigate(command string) (RunResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if runtime.GOOS == "windows" {
+		exe := "powershell.exe"
+		if p, err := e.CachedLookPath("pwsh"); err == nil {
+			exe = p
+		}
+		start := time.Now()
+		cmd := exec.CommandContext(ctx, exe, "-NoProfile", "-NonInteractive", "-Command", command)
+		cmd.Env = os.Environ()
+		hideWindow(cmd)
+		output, err := cmd.CombinedOutput()
+		exitCode := 0
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+				err = nil
+			}
+		}
+		return RunResult{Output: string(output), ExitCode: exitCode, DurationMs: time.Since(start).Milliseconds()}, err
+	}
+
+	// Unix: run via default shell silently
+	shell, args := e.DetectShell()
+	cmdArgs := append(args, command)
+	start := time.Now()
+	cmd := exec.CommandContext(ctx, shell, cmdArgs...)
+	cmd.Env = os.Environ()
+	output, err := cmd.CombinedOutput()
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+			err = nil
+		}
+	}
+	return RunResult{Output: string(output), ExitCode: exitCode, DurationMs: time.Since(start).Milliseconds()}, err
 }
 
 func CdExpand(dir string) (string, error) {

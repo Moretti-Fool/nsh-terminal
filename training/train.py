@@ -50,12 +50,11 @@ eval_dataset = eval_dataset.map(format_chat_template, batched=True)
 print("Configuring training...")
 args = SFTConfig(
     max_length=512,
-    dataset_text_field='text',
-    eos_token='<|im_end|>',
+    dataset_kwargs={"skip_prepare_dataset": True},
+    eos_token="",
     packing=False,
     per_device_train_batch_size = 1,
     gradient_accumulation_steps = 8,
-    warmup_ratio = 0.1,
     num_train_epochs = 3,
     learning_rate = 2e-4,
     fp16 = True,
@@ -69,6 +68,9 @@ args = SFTConfig(
     save_steps=200,
     eval_strategy="epoch",
 )
+
+# Bypass TRL 0.24 validation bug by injecting the tokens it strictly searches for
+tokenizer.add_tokens(["<EOS_TOKEN>", "<PAD_TOKEN>"])
 
 trainer = SFTTrainer(
     model = model,

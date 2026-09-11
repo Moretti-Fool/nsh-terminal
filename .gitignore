@@ -8,3 +8,7 @@ docs/
 *.zip
 *.txt
 *.exe~
+nsh-*.exe
+*.exe
+training/llama.cpp/
+training/unsloth_compiled_cache/

@@ -342,6 +342,27 @@ func (r *REPL) handleNL(input string) {
 		Env:      ollama.Env{CWD: snap.CWD, Shell: shell, Listing: snap.Listing, Present: snap.Present},
 		Examples: r.nlFewShots(),
 		RunTool: func(name string, args map[string]any) string {
+			if name == "run_command" {
+				cmdStr := fmt.Sprint(args["command"])
+				if cmdStr == "" {
+					return "missing argument: command"
+				}
+				display := cmdStr
+				if len(display) > 80 {
+					display = display[:80] + "..."
+				}
+				fmt.Printf("\r                \r\033[90m  ↳ %s\033[0m\n", display)
+				fmt.Print("[nsh] thinking...")
+				result, err := r.executor.RunInvestigate(cmdStr)
+				if err != nil {
+					return "error: " + err.Error()
+				}
+				out := result.Output
+				if result.ExitCode != 0 {
+					out = fmt.Sprintf("EXIT CODE %d\n%s", result.ExitCode, out)
+				}
+				return out
+			}
 			return ground.ExecTool(name, args, cwd, r.executor.PathExists)
 		},
 	})
@@ -383,26 +404,35 @@ func (r *REPL) handleNL(input string) {
 		return
 	}
 
-	reason := result.Output
-	if reason == "" {
-		reason = fmt.Sprintf("exit code %d", result.ExitCode)
+	// Agentic repair loop: retry up to MaxRetries times, feeding errors back.
+	maxRetries := r.cfg.Ollama.MaxRetries
+	if maxRetries <= 0 {
+		maxRetries = 1
 	}
-	fmt.Print("[nsh] retrying...")
-	repaired, _, rerr := r.ollama.Repair(ctx, msgs, reason)
-	fmt.Print("\r                 \r")
-	if rerr != nil || repaired.Join() == "" || repaired.Join() == generated || ollama.ValidatePlan(repaired, shell) != nil {
-		r.recordGenerated(generated)
-		r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
-		return
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		reason := result.Output
+		if reason == "" {
+			reason = fmt.Sprintf("exit code %d", result.ExitCode)
+		}
+		fmt.Printf("[nsh] retrying (%d/%d)...", attempt+1, maxRetries)
+		repaired, newMsgs, rerr := r.ollama.Repair(ctx, msgs, reason)
+		fmt.Print("\r                         \r")
+		if rerr != nil || repaired.Join() == "" || repaired.Join() == generated || ollama.ValidatePlan(repaired, shell) != nil {
+			continue
+		}
+		generated = repaired.Join()
+		msgs = newMsgs
+		if r.cfg.UI.ShowGeneratedCommand {
+			fmt.Printf("\033[36m> %s\033[0m\n", generated)
+		}
+		if !r.confirmIfDestructive(generated) {
+			return
+		}
+		ok, result = r.runGeneratedCommands(generated)
+		if ok {
+			break
+		}
 	}
-	generated = repaired.Join()
-	if r.cfg.UI.ShowGeneratedCommand {
-		fmt.Printf("\033[36m> %s\033[0m\n", generated)
-	}
-	if !r.confirmIfDestructive(generated) {
-		return
-	}
-	_, result = r.runGeneratedCommands(generated)
 	r.recordGenerated(generated)
 	r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
 }

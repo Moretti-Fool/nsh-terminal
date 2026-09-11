@@ -1,15 +1,11 @@
 package ground
 
 import (
-	"bufio"
-	"bytes"
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"runtime"
 	"strings"
-	"time"
 )
 
 const maxListing = 40
@@ -68,92 +64,34 @@ func ListCWD(cwd string, limit int) string {
 	return strings.TrimSpace(b.String())
 }
 
-// ExecTool runs one translator tool. Unknown names return an error string, not a panic.
 func ExecTool(name string, args map[string]any, cwd string, pathExists func(string) bool) string {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "list_cwd":
-		return ListCWD(cwd, maxListing)
-	case "which":
-		prog := argString(args, "name")
-		if prog == "" {
-			return "missing argument: name"
+	cmdStr := ""
+	if name == "run_command" {
+		cmdStr = argString(args, "command")
+	} else {
+		// The 1.5B model often hallucinates the shell command directly into the 'name' field
+		cmdStr = name
+		if cmdArg := argString(args, "command"); cmdArg != "" && cmdArg != name {
+			cmdStr = cmdStr + " " + cmdArg
 		}
-		if pathExists != nil && pathExists(prog) {
-			if p, err := exec.LookPath(prog); err == nil {
-				return p
-			}
-			return prog + " is on PATH"
-		}
-		return prog + " is not on PATH"
-	case "git_status":
-		if pathExists != nil && !pathExists("git") {
-			return "git is not on PATH"
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "git", "-C", cwd, "status", "--short", "-b")
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		cmd.Stderr = &out
-		if err := cmd.Run(); err != nil {
-			return strings.TrimSpace(out.String() + "\n" + err.Error())
-		}
-		s := strings.TrimSpace(out.String())
-		if s == "" {
-			return "(clean working tree)"
-		}
-		return trimRunes(s, 1500)
-	case "netstat":
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", "Get-NetTCPConnection -State Listen | Select-Object -Property LocalAddress,LocalPort,OwningProcess | ConvertTo-Json")
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		cmd.Stderr = &out
-		if err := cmd.Run(); err != nil {
-			return trimRunes(strings.TrimSpace(out.String()+"\n"+err.Error()), 2000)
-		}
-		return trimRunes(strings.TrimSpace(out.String()), 2000)
-	case "env_var":
-		name := argString(args, "name")
-		if name == "" {
-			return "missing argument: name"
-		}
-		if val, ok := os.LookupEnv(name); ok {
-			if val == "" {
-				// Just return empty if actually set to empty
-				return val
-			}
-			return val
-		}
-		return "(not set)"
-	case "read_file_head":
-		path := argString(args, "path")
-		if path == "" {
-			return "missing argument: path"
-		}
-		fullPath := path
-		if !filepath.IsAbs(path) {
-			fullPath = filepath.Join(cwd, path)
-		}
-		f, err := os.Open(fullPath)
-		if err != nil {
-			return err.Error()
-		}
-		defer f.Close()
-		scanner := bufio.NewScanner(f)
-		var b strings.Builder
-		for i := 0; i < 20 && scanner.Scan(); i++ {
-			b.WriteString(scanner.Text())
-			b.WriteString("\n")
-		}
-		if err := scanner.Err(); err != nil {
-			b.WriteString(err.Error())
-		}
-		return trimRunes(strings.TrimSpace(b.String()), 2000)
-	default:
-		return "unknown tool: " + name
 	}
+	
+	if cmdStr == "" {
+		return "error: missing command argument"
+	}
+	
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", cmdStr)
+	} else {
+		cmd = exec.Command("bash", "-c", cmdStr)
+	}
+	cmd.Dir = cwd
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "error: " + err.Error() + "\noutput: " + string(out)
+	}
+	return string(out)
 }
 
 func argString(args map[string]any, key string) string {

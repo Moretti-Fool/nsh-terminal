@@ -49,9 +49,11 @@ func (p Plan) Join() string {
 }
 
 type planDTO struct {
-	Commands []string `json:"commands"`
-	Command  string   `json:"command"`
-	Dialect  string   `json:"dialect"`
+	Commands  any            `json:"commands"`
+	Command   string         `json:"command"`
+	Dialect   string         `json:"dialect"`
+	Name      string         `json:"name"`
+	Arguments any            `json:"arguments"`
 }
 
 // ParsePlan reads constrained JSON, falling back to sanitized plain command text.
@@ -64,13 +66,51 @@ func ParsePlan(s string) (Plan, error) {
 	raw := extractJSONObject(s)
 	var dto planDTO
 	if raw != "" && json.Unmarshal([]byte(raw), &dto) == nil {
-		cmds := dto.Commands
+		var cmds []string
+		if cList, ok := dto.Commands.([]any); ok {
+			for _, cItem := range cList {
+				if s, ok := cItem.(string); ok {
+					cmds = append(cmds, s)
+				} else if m, ok := cItem.(map[string]any); ok {
+					if s, ok := m["command"].(string); ok {
+						cmds = append(cmds, s)
+					}
+				}
+			}
+		}
 		if len(cmds) == 0 && strings.TrimSpace(dto.Command) != "" {
 			cmds = []string{dto.Command}
 		}
+		if len(cmds) == 0 && dto.Name != "" {
+			cmdStr := ""
+			if dto.Name == "run_command" {
+				if argMap, ok := dto.Arguments.(map[string]any); ok {
+					if c, ok := argMap["command"].(string); ok {
+						cmdStr = c
+					}
+				} else if argStr, ok := dto.Arguments.(string); ok {
+					var m map[string]any
+					if json.Unmarshal([]byte(argStr), &m) == nil {
+						if c, ok := m["command"].(string); ok {
+							cmdStr = c
+						}
+					}
+				}
+			} else {
+				cmdStr = dto.Name
+			}
+			if cmdStr != "" {
+				cmds = []string{cmdStr}
+			}
+		}
+
 		expanded := expandCommandLines(cmds)
 		if len(expanded) > 0 {
-			return Plan{Commands: expanded, Dialect: strings.ToLower(strings.TrimSpace(dto.Dialect))}, nil
+			dialect := strings.ToLower(strings.TrimSpace(dto.Dialect))
+			if dialect == "" {
+				dialect = "powershell"
+			}
+			return Plan{Commands: expanded, Dialect: dialect}, nil
 		}
 	}
 
