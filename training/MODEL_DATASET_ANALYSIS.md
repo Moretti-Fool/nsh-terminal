@@ -160,3 +160,28 @@ The training records in `nsh_train.jsonl` must match the exact prompt structure 
    - Export directly to GGUF for local Ollama serving (`ollama create nsh-local -f Modelfile`).
 4. **Validation**:
    - Evaluate against `nsh_eval.jsonl` ensuring zero syntax errors and valid shell commands across all platforms.
+
+---
+
+## Part 5: Small Pre-Trained & Fine-Tuned Models on the Internet
+
+### 1. Dedicated NL-to-Shell Fine-Tuned Models
+*   **`rlawltjd/code-llama3-7b-text-to-bash`** (Hugging Face): Fine-tuned CodeLlama on data-augmented natural language to bash tasks.
+*   **`Edoigtrd/T5-nl2bash`** (Hugging Face): Lightweight T5-based model (0.2B parameters) specialized strictly for NL2Bash translation.
+*   **`laion/rl_r2egym-nl2bash-swesmith`** (Hugging Face): Reinforcement-learning tuned model on bash generation benchmarks.
+*   *Limitation of existing public fine-tunes*: The overwhelming majority of public fine-tuned models are **Linux Bash only**. Almost none of them natively know PowerShell or Windows CMD idioms.
+
+### 2. Recommended Small Base Models for Multi-Shell Fine-Tuning
+For local serving in `nsh` via Ollama, modern small coder architectures offer high native knowledge of both Bash and PowerShell:
+
+*   **`Qwen2.5-Coder-1.5B-Instruct`** (`ollama run qwen2.5-coder:1.5b`):
+    - **Size**: ~1.5B parameters (~1.0 GB in Q4_K_M).
+    - **Characteristics**: Extremely fast inference with sub-100ms cold starts. Ideal for low-latency command suggestions and resource-constrained environments.
+*   **`Qwen2.5-Coder-3B-Instruct`** (`ollama run qwen2.5-coder:3b`):
+    - **Size**: ~3B parameters (~1.9 GB in Q4_K_M).
+    - **Characteristics**: Optimal balance between parameter efficiency and deep syntactic reasoning. Accurately handles multi-parameter PowerShell cmdlets and complex piped shell commands.
+*   **`ibm-granite/granite-3b-code-instruct`**:
+    - **Size**: 3B parameters. Specifically benchmarked on natural language to Bash and PowerShell execution.
+*   **`Qwen2.5-Coder-7B-Instruct`** (`ollama run qwen2.5-coder:7b`):
+    - **Size**: ~7B parameters (~4.7 GB in Q4_K_M).
+    - **Characteristics**: State-of-the-art capability for local coding models. Highly recommended when paired with curated `cli-1m` SFT.
