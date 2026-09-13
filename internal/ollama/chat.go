@@ -334,15 +334,17 @@ Do not invent filenames that are not in the listing or tool results.
 }
 
 func translatorShellNote(shell string) string {
+	baseRules := `CRITICAL: Do NOT use pagers (less, more) as they will freeze the headless terminal. Always use --no-pager for git (e.g. git --no-pager log). When searching files recursively, ALWAYS exclude .git, node_modules, and vendor directories to prevent freezing.`
+	
 	switch NormalizeShell(shell) {
 	case "powershell":
-		return `Use PowerShell (cmdlets, pipelines, $_).
+		return baseRules + "\n" + `Use PowerShell (cmdlets, pipelines, $_).
 Do not use cmd.exe switches such as dir /b.
 No Out-GridView, Read-Host, pause, or other interactive UI.`
 	case "cmd":
-		return `Use ONLY cmd.exe syntax. Do NOT use PowerShell cmdlets. Use dir, sort, findstr, type, for, forfiles.`
+		return baseRules + "\n" + `Use ONLY cmd.exe syntax. Do NOT use PowerShell cmdlets. Use dir, sort, findstr, type, for, forfiles.`
 	default:
-		return `Use POSIX shell syntax for this OS.`
+		return baseRules + "\n" + `Use POSIX shell syntax for this OS.`
 	}
 }
 
