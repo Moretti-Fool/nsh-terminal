@@ -103,14 +103,31 @@ func (c *Categorizer) worker() {
 		}
 
 		prompt := fmt.Sprintf(`You categorize terminal commands based on their output.
-Existing categories: %s
+Choose an exact name from the Existing Categories ONLY if it is a PERFECT, highly specific match.
+Otherwise, invent ONE new specific category (max 2 words, Title Case).
 
+Example 1:
+Existing Categories: ["Terminal", "Network"]
+Command: git status
+Command Output: On branch main
+{"category": "Version Control"}
+
+Example 2:
+Existing Categories: ["Package Management", "Database"]
+Command: npm install
+Command Output: added 50 packages
+{"category": "Package Management"}
+
+Example 3:
+Existing Categories: ["Version Control"]
+Command: clear
+Command Output: 
+{"category": "Terminal"}
+
+Now categorize this:
+Existing Categories: %s
 Command: %s%s
 Command Output: %s
-
-Only reuse an existing category if it is highly specific and perfectly matches the command's core purpose.
-Do NOT dump commands into overly broad categories like 'Shell' or 'Misc'.
-If no highly specific category exists, invent ONE new broad category name (max 2 words, Title Case).
 Respond in STRICT JSON format: {"category": "Name"}`, string(catList), task.Command, execContext, task.Output)
 
 		// Call the LLM
