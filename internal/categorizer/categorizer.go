@@ -24,8 +24,9 @@ type Categorizer struct {
 }
 
 type cmdTask struct {
-	Command string
-	Output  string
+	Command   string
+	Generated string
+	Output    string
 }
 
 func New(client *ollama.Client) *Categorizer {
@@ -71,7 +72,7 @@ func (c *Categorizer) save() {
 	os.WriteFile(path, b, 0644)
 }
 
-func (c *Categorizer) CategorizeAsync(command, output string) {
+func (c *Categorizer) CategorizeAsync(command, generated, output string) {
 	if strings.TrimSpace(command) == "" {
 		return
 	}
@@ -80,7 +81,7 @@ func (c *Categorizer) CategorizeAsync(command, output string) {
 		output = output[:500]
 	}
 	select {
-	case c.workerChan <- cmdTask{Command: command, Output: output}:
+	case c.workerChan <- cmdTask{Command: command, Generated: generated, Output: output}:
 	default:
 		// Queue full, drop it so we don't block the REPL
 	}
@@ -96,15 +97,21 @@ func (c *Categorizer) worker() {
 		catList, _ := json.Marshal(c.categories)
 		c.mu.RUnlock()
 
+		execContext := ""
+		if task.Generated != "" {
+			execContext = fmt.Sprintf("\nExecuted Under The Hood As: %s", task.Generated)
+		}
+
 		prompt := fmt.Sprintf(`You categorize terminal commands based on their output.
 Existing categories: %s
 
-Command: %s
+Command: %s%s
 Command Output: %s
 
-If the command clearly belongs in one of the existing categories, output the exact existing category name.
-If it is a new domain, invent ONE new broad category name (max 2 words, Title Case).
-Respond in STRICT JSON format: {"category": "Name"}`, string(catList), task.Command, task.Output)
+Only reuse an existing category if it is highly specific and perfectly matches the command's core purpose.
+Do NOT dump commands into overly broad categories like 'Shell' or 'Misc'.
+If no highly specific category exists, invent ONE new broad category name (max 2 words, Title Case).
+Respond in STRICT JSON format: {"category": "Name"}`, string(catList), task.Command, execContext, task.Output)
 
 		// Call the LLM
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

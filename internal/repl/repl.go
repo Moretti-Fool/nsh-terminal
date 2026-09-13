@@ -319,9 +319,79 @@ func (r *REPL) handleCommand(input string) {
 	r.saveHistory(input, "command", "", result.ExitCode, preview, result.DurationMs)
 }
 
+func matchNLQuery(query string, pastEntries []history.Entry) string {
+	q := strings.ToLower(strings.TrimSpace(query))
+	// 1. Exact match
+	for _, e := range pastEntries {
+		if strings.ToLower(strings.TrimSpace(e.Input)) == q {
+			return e.Generated
+		}
+	}
+	// 2. Simple token overlap (Jaccard)
+	qFields := strings.Fields(q)
+	if len(qFields) == 0 {
+		return ""
+	}
+	qTokens := make(map[string]bool)
+	for _, tk := range qFields {
+		qTokens[tk] = true
+	}
+
+	bestScore := 0.0
+	bestGen := ""
+	for _, e := range pastEntries {
+		eFields := strings.Fields(strings.ToLower(strings.TrimSpace(e.Input)))
+		if len(eFields) == 0 {
+			continue
+		}
+		overlap := 0
+		for _, tk := range eFields {
+			if qTokens[tk] {
+				overlap++
+			}
+		}
+		score := float64(overlap) / float64(len(qTokens)+len(eFields)-overlap)
+		if score > bestScore {
+			bestScore = score
+			bestGen = e.Generated
+		}
+	}
+	if bestScore >= 0.75 { // 75% overlap threshold for fuzzy caching
+		return bestGen
+	}
+	return ""
+}
+
 func (r *REPL) handleNL(input string) {
 	if scratch.LooksLikePython(input) && r.scratch.Available() {
 		r.handleScratchRun(input)
+		return
+	}
+
+	// 1. Check local cache layer for exact or very similar past commands
+	cachedCmd := matchNLQuery(input, r.history.SuccessfulNL(200))
+	if cachedCmd != "" {
+		fmt.Printf("\n[nsh] (from memory) \033[36m> %s\033[0m\n", cachedCmd)
+		if r.confirmIfDestructive(cachedCmd) {
+			ok, result := r.runGeneratedCommands(cachedCmd)
+			if ok {
+				r.recordGenerated(cachedCmd)
+				r.saveHistory(input, "nl", cachedCmd, result.ExitCode, result.Output, result.DurationMs)
+			}
+		}
+		return
+	}
+
+	// 1.5 Intercept natural language requests to list categories
+	lowerInput := strings.ToLower(strings.TrimSpace(input))
+	if strings.HasPrefix(lowerInput, "commands under ") {
+		domain := strings.TrimSpace(lowerInput[15:])
+		r.handleCategories([]string{domain})
+		return
+	}
+	if strings.HasPrefix(lowerInput, "commands in ") {
+		domain := strings.TrimSpace(lowerInput[12:])
+		r.handleCategories([]string{domain})
 		return
 	}
 
@@ -1411,12 +1481,8 @@ func (r *REPL) saveHistory(input, inputType, generated string, exitCode int, out
 	})
 
 	// Dispatch background categorization
-	cmdToCat := input
-	if inputType == "NL" && generated != "" {
-		cmdToCat = generated
-	}
 	if r.categorizer != nil {
-		r.categorizer.CategorizeAsync(cmdToCat, output)
+		r.categorizer.CategorizeAsync(input, generated, output)
 	}
 }
 
