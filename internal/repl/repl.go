@@ -319,6 +319,16 @@ func (r *REPL) handleCommand(input string) {
 	r.saveHistory(input, "command", "", result.ExitCode, preview, result.DurationMs)
 }
 
+func isStopWord(w string) bool {
+	stops := map[string]bool{
+		"command": true, "which": true, "was": true, "used": true, "to": true,
+		"know": true, "my": true, "for": true, "the": true, "what": true,
+		"is": true, "how": true, "do": true, "i": true, "show": true, "me": true,
+		"commands": true, "in": true, "under": true, "list": true, "find": true,
+	}
+	return stops[w]
+}
+
 func matchNLQuery(query string, pastEntries []history.Entry) string {
 	q := strings.ToLower(strings.TrimSpace(query))
 	// 1. Exact match
@@ -327,14 +337,20 @@ func matchNLQuery(query string, pastEntries []history.Entry) string {
 			return e.Generated
 		}
 	}
-	// 2. Simple token overlap (Jaccard)
+	
+	// 2. Token overlap excluding stop words
 	qFields := strings.Fields(q)
-	if len(qFields) == 0 {
-		return ""
-	}
 	qTokens := make(map[string]bool)
+	validQTokens := 0
 	for _, tk := range qFields {
-		qTokens[tk] = true
+		if !isStopWord(tk) {
+			qTokens[tk] = true
+			validQTokens++
+		}
+	}
+
+	if validQTokens == 0 {
+		return ""
 	}
 
 	bestScore := 0.0
@@ -344,19 +360,32 @@ func matchNLQuery(query string, pastEntries []history.Entry) string {
 		if len(eFields) == 0 {
 			continue
 		}
+		
 		overlap := 0
+		validETokens := 0
 		for _, tk := range eFields {
-			if qTokens[tk] {
-				overlap++
+			if !isStopWord(tk) {
+				validETokens++
+				if qTokens[tk] {
+					overlap++
+				}
 			}
 		}
-		score := float64(overlap) / float64(len(qTokens)+len(eFields)-overlap)
+		
+		if validETokens == 0 {
+			continue
+		}
+
+		// Calculate Dice Coefficient or Jaccard
+		score := float64(overlap*2) / float64(validQTokens+validETokens)
 		if score > bestScore {
 			bestScore = score
 			bestGen = e.Generated
 		}
 	}
-	if bestScore >= 0.75 { // 75% overlap threshold for fuzzy caching
+	
+	// If the core non-stop-word tokens match significantly (>= 50%)
+	if bestScore >= 0.50 {
 		return bestGen
 	}
 	return ""
