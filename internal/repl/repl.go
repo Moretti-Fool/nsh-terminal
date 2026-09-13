@@ -445,57 +445,84 @@ func (r *REPL) handleNL(input string) {
 	snap := ground.Capture(cwd, r.executor.PathExists)
 	shell := r.executor.NLShellName()
 
-	fmt.Print("[nsh] thinking...")
-	plan, msgs, err := r.ollama.Translate(ctx, ollama.TranslateRequest{
-		Input:    input,
-		Env:      ollama.Env{CWD: snap.CWD, Shell: shell, Listing: snap.Listing, Present: snap.Present},
-		Examples: r.nlFewShots(),
-		RunTool: func(name string, args map[string]any) string {
-			if name == "run_command" {
-				cmdStr := fmt.Sprint(args["command"])
-				if cmdStr == "" {
-					return "missing argument: command"
-				}
-				display := cmdStr
-				if len(display) > 80 {
-					display = display[:80] + "..."
-				}
-				fmt.Printf("\r                \r\033[90m  ↳ %s\033[0m\n", display)
-				fmt.Print("[nsh] thinking...")
-				result, err := r.executor.RunInvestigate(cmdStr)
-				if err != nil {
-					return "error: " + err.Error()
-				}
-				out := result.Output
-				if result.ExitCode != 0 {
-					out = fmt.Sprintf("EXIT CODE %d\n%s", result.ExitCode, out)
-				}
-				return out
-			}
-			return ground.ExecTool(name, args, cwd, r.executor.PathExists)
-		},
-	})
-	fmt.Print("\r                \r")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[nsh] Ollama error: %v\n", err)
-		return
-	}
+	var generated string
+	var msgs []ollama.ChatMessage
 
-	if vErr := ollama.ValidatePlan(plan, shell); vErr != nil {
-		fmt.Print("[nsh] retrying...")
-		repaired, newMsgs, rerr := r.ollama.Repair(ctx, msgs, vErr.Error())
-		fmt.Print("\r                 \r")
-		if rerr != nil || ollama.ValidatePlan(repaired, shell) != nil {
-			fmt.Println("[nsh] Could not translate that request into a command.")
-			return
+	tryModel := func(modelName string, isFallback bool) bool {
+		if isFallback {
+			fmt.Printf("[nsh] Primary model failed, falling back to %s...\n", modelName)
+			r.ollama.SetGenerationModel(modelName)
+			// Restore back to default generation model when done
+			defer r.ollama.SetGenerationModel(r.cfg.Ollama.GenerationModel)
+		} else {
+			fmt.Print("[nsh] thinking...")
 		}
-		plan = repaired
-		msgs = newMsgs
+
+		p, m, err := r.ollama.Translate(ctx, ollama.TranslateRequest{
+			Input:    input,
+			Env:      ollama.Env{CWD: snap.CWD, Shell: shell, Listing: snap.Listing, Present: snap.Present},
+			Examples: r.nlFewShots(),
+			RunTool: func(name string, args map[string]any) string {
+				if name == "run_command" {
+					cmdStr := fmt.Sprint(args["command"])
+					if cmdStr == "" {
+						return "missing argument: command"
+					}
+					display := cmdStr
+					if len(display) > 80 {
+						display = display[:80] + "..."
+					}
+					fmt.Printf("\r                \r\033[90m  $ %s\033[0m\n", display)
+					fmt.Print("[nsh] thinking...")
+					result, err := r.executor.RunInvestigate(cmdStr)
+					if err != nil {
+						return "error: " + err.Error()
+					}
+					out := result.Output
+					if result.ExitCode != 0 {
+						out = fmt.Sprintf("EXIT CODE %d\n%s", result.ExitCode, out)
+					}
+					return out
+				}
+				return ground.ExecTool(name, args, cwd, r.executor.PathExists)
+			},
+		})
+		if !isFallback {
+			fmt.Print("\r                \r")
+		}
+
+		if err != nil {
+			return false
+		}
+
+		if vErr := ollama.ValidatePlan(p, shell); vErr != nil {
+			fmt.Print("[nsh] retrying...")
+			repaired, newMsgs, rerr := r.ollama.Repair(ctx, m, vErr.Error())
+			fmt.Print("\r                 \r")
+			if rerr != nil || ollama.ValidatePlan(repaired, shell) != nil {
+				return false
+			}
+			p = repaired
+			m = newMsgs
+		}
+
+		gen := p.Join()
+		if gen == "" {
+			return false
+		}
+		
+		generated = gen
+		msgs = m
+		return true
 	}
 
-	generated := plan.Join()
-	if generated == "" {
-		fmt.Println("[nsh] No command generated.")
+	success := tryModel(r.cfg.Ollama.GenerationModel, false)
+	if !success && r.cfg.Ollama.FallbackModel != "" && r.cfg.Ollama.FallbackModel != r.cfg.Ollama.GenerationModel {
+		success = tryModel(r.cfg.Ollama.FallbackModel, true)
+	}
+
+	if !success {
+		fmt.Println("[nsh] Could not translate that request into a command.")
 		return
 	}
 
