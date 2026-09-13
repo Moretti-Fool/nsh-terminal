@@ -28,22 +28,6 @@ var CommandFormat = json.RawMessage(`{
   "required": ["commands", "dialect"]
 }`)
 
-var classifyFormat = json.RawMessage(`{
-  "type": "object",
-  "properties": {
-    "label": {"type": "string", "enum": ["COMMAND", "NL", "HISTORY"]}
-  },
-  "required": ["label"]
-}`)
-
-var extractDomainFormat = json.RawMessage(`{
-  "type": "object",
-  "properties": {
-    "domain": {"type": "string"}
-  },
-  "required": ["domain"]
-}`)
-
 // Plan is a free-form command list plus the dialect the model claims to have used.
 type Plan struct {
 	Explanation string   `json:"explanation,omitempty"`

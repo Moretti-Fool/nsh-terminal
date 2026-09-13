@@ -428,16 +428,6 @@ func (r *REPL) handleNL(input string) {
 
 	ctx := context.Background()
 
-	// 1.5 Dynamically check if this is a history/category request
-	class, err := r.ollama.ClassifyInput(ctx, input)
-	if err == nil && class == "HISTORY" {
-		domain, _ := r.ollama.ExtractDomain(ctx, input)
-		if domain != "" {
-			r.handleCategories([]string{domain})
-			return
-		}
-	}
-
 	cwd, err := os.Getwd()
 	if err != nil {
 		cwd = "."
@@ -904,49 +894,7 @@ func (r *REPL) handleAmbiguous(input string) {
 		r.handleCommand(input)
 		return
 	}
-
-	ctx := context.Background()
-	classification, err := r.ollama.ClassifyInput(ctx, input)
-	if err != nil {
-		r.handleCommand(input)
-		return
-	}
-
-	if classification == "COMMAND" {
-		fields := strings.Fields(input)
-		first := ""
-		if len(fields) > 0 {
-			first = strings.ToLower(fields[0])
-		}
-		hasFlag := false
-		for _, f := range fields {
-			if strings.HasPrefix(f, "-") {
-				hasFlag = true
-				break
-			}
-		}
-		if hasFlag || (first != "" && (r.executor.PathExists(first) || r.executor.IsBuiltin(first) || strings.EqualFold(first, "cd"))) {
-			r.handleCommand(input)
-			return
-		}
-		r.handleNL(input)
-		return
-	}
-
-	wfNames := r.workflows.Names()
-	if len(wfNames) > 0 {
-		match, err := r.ollama.MatchWorkflow(ctx, input, wfNames)
-		if err == nil && match != "" {
-			fmt.Printf("[nsh] Did you mean workflow %q? [Y/n] ", match)
-			var confirm string
-			fmt.Scanln(&confirm)
-			confirm = strings.ToLower(strings.TrimSpace(confirm))
-			if confirm == "" || confirm == "y" || confirm == "yes" {
-				r.handleWorkflow(match)
-				return
-			}
-		}
-	}
+	// Pure NL fallback without bloated LLM intent classifiers
 	r.handleNL(input)
 }
 
