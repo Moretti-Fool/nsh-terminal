@@ -318,13 +318,13 @@ func (c *Client) buildTranslatorPrompt(env Env, examples []FewShot) string {
 	} else if bits := presentBits(c.availableBins); bits != "" {
 		present = "\n" + bits
 	}
-
 	shellNote := translatorShellNote(shell)
 	var ex strings.Builder
-	if len(examples) > 0 && !modelSupportsTools(c.generationModel) {
+	if len(examples) > 0 {
 		ex.WriteString("\nRecent successful translations on this machine:\n")
 		for _, e := range examples {
-			fmt.Fprintf(&ex, "- %q → %s\n", e.Input, e.Command)
+			cmds, _ := json.Marshal([]string{e.Command})
+			fmt.Fprintf(&ex, "- %q -> {\"explanation\": \"\", \"commands\": %s}\n", e.Input, cmds)
 		}
 	}
 
@@ -338,9 +338,10 @@ OS: %s
 Shell: %s
 CWD: %s%s
 %s%s
-When you are done investigating and want to give the final commands to the user, respond with JSON ONLY: {"commands":["..."],"dialect":"%s"}
+When you are done investigating and want to give the final commands to the user, respond with JSON ONLY:
+{"explanation": "any conversational text you want to say to the user", "commands":["..."],"dialect":"%s"}
 dialect must be exactly %s.
-At most 3 commands. No markdown. No explanations.
+At most 3 commands. No markdown.
 Do not invent filenames that are not in the listing or tool results.
 %s`, runtime.GOOS, shell, env.CWD, present, shellNote, toolInstruction, NormalizeShell(shell), NormalizeShell(shell), ex.String())
 }
