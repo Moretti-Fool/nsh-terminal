@@ -39,6 +39,9 @@ print("Loading and preparing datasets...")
 from datasets import concatenate_datasets
 base_dataset = load_dataset("json", data_files="data/nsh_train.jsonl", split="train")
 advanced_dataset = load_dataset("json", data_files="data/nsh_train_advanced.jsonl", split="train")
+
+# Align the schema so concatenate_datasets doesn't crash on missing tool_calls
+advanced_dataset = advanced_dataset.cast(base_dataset.features)
 train_dataset = concatenate_datasets([base_dataset, advanced_dataset])
 
 eval_dataset = load_dataset("json", data_files="data/nsh_eval.jsonl", split="train")

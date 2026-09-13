@@ -1530,6 +1530,7 @@ Built-in commands:
   nsh categories <domain>        Search commands within a domain
   nsh replay HH:MM               Show details of a command at that time
   nsh replay HH:MM --run         Re-execute that command
+  nsh learn-import <file>        Import dataset to fine-tune local memory
   nsh config                     Open config in your editor
   exit / quit                    Exit nsh
 `, Version)

@@ -66,6 +66,8 @@ Getting started:
 Interactive commands:
   nsh help                  show full command reference
   nsh models                list / switch Ollama models
+  nsh model fallback <name> set fallback model
+  nsh learn-import <file>   import jsonl dataset for fine-tuning
   nsh run <description>     generate and run a Python script
   nsh up <workflow>          launch parallel services
   nsh down                  stop all services

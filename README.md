@@ -15,7 +15,11 @@ A cross-platform terminal that understands both shell commands and natural langu
 - **Workflow Recording & Replay** — Record a sequence of commands, save it with a name, and replay it anytime. Ctrl+C interrupts the current command without cancelling the recording.
 - **AI Search & Answers** — `ask what is kubernetes` gets an AI answer in the terminal. `google! <query>` gives both an AI answer and opens the browser.
 - **Cross-Platform** — Works on Windows, macOS, and Linux. On Windows, typed commands still use fast builtins/`cmd.exe`; natural language runs through a warm PowerShell host so cmdlets work without a 2–3s cold start per command.
-- **Structured History** — Background Auto-Categorization engine dynamically organizes command history by communicating with the local LLM. Browse by day, search across days, and replay past commands.
+- **Structured History & Auto-Categorization Agent** — Background Auto-Categorization engine dynamically organizes command history by communicating with the local LLM async. Browse by day, search across domains, and replay past commands.
+- **RAG OS/Shell Filtering** — When retrieving context for AI features, nsh intelligently filters the vector store based on the active OS and shell environment, ensuring highly relevant responses.
+- **Robust JSON Extraction** — Employs a resilient plan parsing logic that grabs the last valid JSON object in a response (often the final generation) and safely falls back to the first.
+- **Double Ladder Fallback** — Specify a fallback model in config (`fallback_model`) that nsh automatically switches to if the primary generation model fails.
+- **Automated Fine-Tuning Pipeline** — Import `.jsonl` datasets with `nsh learn-import` to fine-tune the system's local memory and improve performance on custom tasks.
 - **Destructive Command Safety** — Detects dangerous commands (`rm -rf`, `DROP TABLE`, etc.) and asks for confirmation.
 - **Graceful Degradation** — Works as a normal shell even when Ollama isn't running. NL features simply become unavailable.
 - **Customizable** — Choose your Ollama model, color theme, prompt style, scratch directory, and more via `config.toml`.
@@ -179,6 +183,8 @@ nsh down
 | `nsh models` | List available Ollama models |
 | `nsh model <name>` | Set generation model |
 | `nsh model classifier <name>` | Set classifier model |
+| `nsh model fallback <name>` | Set fallback generation model |
+| `nsh learn-import <file>` | Import `.jsonl` dataset to fine-tune local memory |
 | `nsh theme <name>` | Set color theme |
 | `nsh run <description>` | Generate and run a Python script |
 | `nsh scratch` | Show scratch directory location |
