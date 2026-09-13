@@ -10,7 +10,7 @@ load_in_4bit = True
 
 print("Loading base model...")
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name = "Qwen/Qwen2.5-0.5B-Instruct",
+    model_name = "Qwen/Qwen2.5-Coder-3B-Instruct",
     max_seq_length = max_seq_length,
     dtype = dtype,
     load_in_4bit = load_in_4bit,
@@ -35,7 +35,12 @@ model = FastLanguageModel.get_peft_model(
 )
 
 print("Loading and preparing datasets...")
-train_dataset = load_dataset("json", data_files="data/nsh_train.jsonl", split="train")
+# Combine the base dataset and the advanced generated dataset
+from datasets import concatenate_datasets
+base_dataset = load_dataset("json", data_files="data/nsh_train.jsonl", split="train")
+advanced_dataset = load_dataset("json", data_files="data/nsh_train_advanced.jsonl", split="train")
+train_dataset = concatenate_datasets([base_dataset, advanced_dataset])
+
 eval_dataset = load_dataset("json", data_files="data/nsh_eval.jsonl", split="train")
 
 def format_chat_template(examples):
