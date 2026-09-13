@@ -31,6 +31,14 @@ var classifyFormat = json.RawMessage(`{
   "required": ["label"]
 }`)
 
+var extractDomainFormat = json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "domain": {"type": "string"}
+  },
+  "required": ["domain"]
+}`)
+
 // Plan is a free-form command list plus the dialect the model claims to have used.
 type Plan struct {
 	Commands []string `json:"commands"`

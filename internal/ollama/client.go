@@ -220,17 +220,27 @@ func (c *Client) ExtractDomain(ctx context.Context, input string) (string, error
 		Model:  c.classifierModel,
 		Prompt: input,
 		System: `Extract the requested category/domain from the user's input.
-If the user says "commands under network", extract "network".
-If the user says "list all git commands", extract "git".
-Respond with just the domain name. Nothing else.`,
+If the user says "commands under network", extract "Network".
+If the user says "list all git commands", extract "Git".
+Respond in STRICT JSON format: {"domain": "Name"}`,
 		Stream:    false,
+		Format:    extractDomainFormat,
 		Options:   genOptions(),
 		KeepAlive: "10m",
 	})
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(resp.Response), nil
+	
+	raw := strings.TrimSpace(resp.Response)
+	var dto struct {
+		Domain string `json:"domain"`
+	}
+	if json.Unmarshal([]byte(extractJSONObject(raw)), &dto) == nil {
+		return strings.TrimSpace(dto.Domain), nil
+	}
+	// Fallback if parsing fails
+	return strings.TrimSpace(SanitizeGenerated(raw)), nil
 }
 
 func (c *Client) GeneratePython(ctx context.Context, input string, cwd string) (string, error) {
