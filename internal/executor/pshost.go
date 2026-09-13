@@ -79,7 +79,7 @@ while ($true) {
 
   $global:LASTEXITCODE = 0
   try {
-    Invoke-Expression $command | Out-Default
+    Invoke-Expression $command 2>&1 | Out-Default
     $code = 0
     if (-not $?) { $code = 1 }
     if ($null -ne $global:LASTEXITCODE -and $global:LASTEXITCODE -ne 0) {
@@ -117,7 +117,6 @@ func (l *lockedBuffer) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	n, err := l.b.Write(p)
-	_, _ = os.Stderr.Write(p)
 	return n, err
 }
 

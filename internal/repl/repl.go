@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -583,7 +584,12 @@ func (r *REPL) nlFewShots(ctx context.Context, input string) []ollama.FewShot {
 	if r.ragStore != nil {
 		emb, err := r.ollama.GenerateEmbeddings(ctx, "nomic-embed-text", []string{input})
 		if err == nil && len(emb) > 0 {
-			results := r.ragStore.Search(emb[0], 3, "few-shot")
+			filters := map[string]string{
+				"type": "few-shot",
+				"os": runtime.GOOS,
+				"shell": r.ollama.ShellName(),
+			}
+			results := r.ragStore.Search(emb[0], 3, filters)
 			for _, res := range results {
 				if cmd, ok := res.Chunk.Metadata["command"]; ok {
 					out = append(out, ollama.FewShot{Input: res.Chunk.Text, Command: cmd})

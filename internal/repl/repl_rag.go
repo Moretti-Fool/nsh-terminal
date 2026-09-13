@@ -108,7 +108,7 @@ func (r *REPL) handleAskDoc(query string) {
 		return
 	}
 
-	results := r.ragStore.Search(emb[0], 3, "")
+	results := r.ragStore.Search(emb[0], 5, map[string]string{})
 	if len(results) == 0 {
 		fmt.Println("No relevant information found in the documentation.")
 		return

@@ -129,16 +129,23 @@ func cosineSimilarity(a, b []float32) float32 {
 	return dot / (float32(math.Sqrt(float64(normA))) * float32(math.Sqrt(float64(normB))))
 }
 
-func (s *Store) Search(queryEmbedding []float32, topK int, filterType string) []SearchResult {
+func (s *Store) Search(queryEmbedding []float32, topK int, filters map[string]string) []SearchResult {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var results []SearchResult
 	for _, chunk := range s.db.Chunks {
-		if filterType != "" {
-			if chunk.Metadata == nil || chunk.Metadata["type"] != filterType {
-				continue
+		match := true
+		if filters != nil && chunk.Metadata != nil {
+			for k, v := range filters {
+				if chunk.Metadata[k] != v {
+					match = false
+					break
+				}
 			}
+		}
+		if !match {
+			continue
 		}
 		
 		score := cosineSimilarity(queryEmbedding, chunk.Embedding)

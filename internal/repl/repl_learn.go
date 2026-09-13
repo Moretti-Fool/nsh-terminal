@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -89,21 +90,30 @@ func (r *REPL) handleLearnImport(args []string) {
 
 	var nlList []string
 	var cmdList []string
+	var osList []string
+	var shellList []string
 
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Text()
-		var entry map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+	reader := bufio.NewReader(f)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			fmt.Printf("Error reading dataset: %v\n", err)
+			return
+		}
+
+		var row map[string]interface{}
+		if json.Unmarshal(line, &row) != nil {
 			continue
 		}
-		
-		messages, ok := entry["messages"].([]interface{})
+		messages, ok := row["messages"].([]interface{})
 		if !ok {
 			continue
 		}
 
-		var nl, cmd string
+		var nl, cmd, osName, shellName string
 		for _, mInt := range messages {
 			m, ok := mInt.(map[string]interface{})
 			if !ok {
@@ -115,7 +125,15 @@ func (r *REPL) handleLearnImport(args []string) {
 				continue
 			}
 
-			if role == "user" && nl == "" {
+			if role == "system" {
+				for _, l := range strings.Split(content, "\n") {
+					if strings.HasPrefix(l, "OS: ") {
+						osName = strings.TrimSpace(strings.TrimPrefix(l, "OS: "))
+					} else if strings.HasPrefix(l, "Shell: ") {
+						shellName = strings.TrimSpace(strings.TrimPrefix(l, "Shell: "))
+					}
+				}
+			} else if role == "user" && nl == "" {
 				nl = content // Only take the FIRST user message (the actual intent)
 			} else if role == "assistant" {
 				// Parse command JSON (take the LAST successful one, overwriting any failed attempts)
@@ -133,8 +151,16 @@ func (r *REPL) handleLearnImport(args []string) {
 		}
 
 		if nl != "" && cmd != "" {
+			if osName == "" {
+				osName = "unknown"
+			}
+			if shellName == "" {
+				shellName = "unknown"
+			}
 			nlList = append(nlList, nl)
 			cmdList = append(cmdList, cmd)
+			osList = append(osList, osName)
+			shellList = append(shellList, shellName)
 		}
 	}
 
@@ -171,7 +197,12 @@ func (r *REPL) handleLearnImport(args []string) {
 				DocID:     docID,
 				Text:      nlList[i+j],
 				Embedding: embedding,
-				Metadata:  map[string]string{"command": cmdList[i+j], "type": "few-shot"},
+				Metadata:  map[string]string{
+					"command": cmdList[i+j], 
+					"type": "few-shot",
+					"os": osList[i+j],
+					"shell": shellList[i+j],
+				},
 			})
 		}
 	}
