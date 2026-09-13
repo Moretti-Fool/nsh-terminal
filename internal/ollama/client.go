@@ -318,7 +318,7 @@ func (c *Client) DoGenerateRaw(ctx context.Context, prompt string, format json.R
 	return resp.Response, nil
 }
 
-func (c *Client) AskJudge(ctx context.Context, judgeModel string, prompt string) bool {
+func (c *Client) AskJudge(ctx context.Context, judgeModel string, prompt string) (bool, error) {
 	req := generateRequest{
 		Model:   judgeModel,
 		Prompt:  prompt,
@@ -327,10 +327,10 @@ func (c *Client) AskJudge(ctx context.Context, judgeModel string, prompt string)
 	}
 	resp, err := c.doGenerate(ctx, req)
 	if err != nil {
-		return false
+		return false, err
 	}
-	res := strings.TrimSpace(strings.ToUpper(resp.Response))
-	return strings.HasPrefix(res, "YES")
+	res := strings.ToUpper(resp.Response)
+	return strings.Contains(res, "YES"), nil
 }
 
 func (c *Client) Ask(ctx context.Context, prompt string) (string, error) {

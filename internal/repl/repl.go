@@ -348,14 +348,22 @@ func (r *REPL) semanticCacheMatch(ctx context.Context, query string, pastEntries
 	}
 	
 	checked := 0
+	seen := make(map[string]bool)
 	for _, e := range pastEntries {
+		cleanInput := strings.ToLower(strings.TrimSpace(e.Input))
+		if seen[cleanInput] {
+			continue
+		}
+		seen[cleanInput] = true
+
 		if checked >= 5 {
 			break
 		}
 		checked++
 		
-		prompt := fmt.Sprintf("Are these two requests asking for the exact same shell action? Request 1: '%s'. Request 2: '%s'. Reply ONLY 'YES' or 'NO'.", query, e.Input)
-		if r.ollama.AskJudge(ctx, judgeModel, prompt) {
+		prompt := fmt.Sprintf("Are these two requests asking for the exact same shell action? Request 1: `%s`. Request 2: `%s`. Reply ONLY 'YES' or 'NO'.", query, e.Input)
+		yes, err := r.ollama.AskJudge(ctx, judgeModel, prompt)
+		if err == nil && yes {
 			return e.Generated
 		}
 	}
@@ -410,12 +418,13 @@ func (r *REPL) handleNL(input string) {
 
 	fewShots := r.nlFewShots(ctx, input)
 
+	// Restore back to default generation model when handleNL completes
+	defer r.ollama.SetGenerationModel(r.cfg.Ollama.GenerationModel)
+
 	tryModel := func(modelName string, isFallback bool) bool {
 		if isFallback {
 			fmt.Printf("[nsh] Primary model failed, falling back to %s...\n", modelName)
 			r.ollama.SetGenerationModel(modelName)
-			// Restore back to default generation model when done
-			defer r.ollama.SetGenerationModel(r.cfg.Ollama.GenerationModel)
 		} else {
 			fmt.Print("[nsh] thinking...")
 		}
@@ -485,11 +494,15 @@ func (r *REPL) handleNL(input string) {
 	}
 
 	verifyCommand := func(cmd string) bool {
-		verifyPrompt := fmt.Sprintf("The user requested: '%s'. The AI generated this shell command: '%s'. Does this command achieve the user's goal? Reply ONLY 'YES' or 'NO'.", input, cmd)
-		return r.ollama.AskJudge(ctx, judgeModel, verifyPrompt)
+		verifyPrompt := fmt.Sprintf("The user requested: `%s`. The AI generated this shell command: `%s`. Does this command achieve the user's goal? Reply ONLY 'YES' or 'NO'.", input, cmd)
+		yes, err := r.ollama.AskJudge(ctx, judgeModel, verifyPrompt)
+		if err != nil {
+			return true // Fail-open to allow execution if the judge model is unavailable/crashes
+		}
+		return yes
 	}
 
-	executeAndCheck := func() (bool, executor.RunResult) {
+	executeAndCheck := func() (bool, executor.RunResult, string) {
 		if plan.Explanation != "" {
 			fmt.Printf("[nsh] %s\n", plan.Explanation)
 		}
@@ -497,48 +510,58 @@ func (r *REPL) handleNL(input string) {
 			fmt.Printf("\033[36m> %s\033[0m\n", generated)
 		}
 		if !r.confirmIfDestructive(generated) {
-			return true, executor.RunResult{}
+			return true, executor.RunResult{}, ""
 		}
 
 		ok, result := r.runGeneratedCommands(generated)
 		
 		if ok && strings.TrimSpace(result.Output) == "" {
-			emptyPrompt := fmt.Sprintf("The user requested: '%s'. The command '%s' executed successfully but returned absolutely no output. Given the user's request, is a completely blank output the correct and expected behavior? Reply ONLY 'YES' or 'NO'.", input, generated)
-			if !r.ollama.AskJudge(ctx, judgeModel, emptyPrompt) {
+			emptyPrompt := fmt.Sprintf("The user requested: `%s`. The command `%s` executed successfully but returned absolutely no output. Given the user's request, is a completely blank output the correct and expected behavior? Reply ONLY 'YES' or 'NO'.", input, generated)
+			yes, err := r.ollama.AskJudge(ctx, judgeModel, emptyPrompt)
+			if err == nil && !yes {
 				fmt.Println("[nsh] Command returned no output, attempting alternative...")
-				return false, result
+				return false, result, "The command ran successfully but produced completely blank output, which is incorrect."
 			}
 		}
 		
-		return ok, result
+		return ok, result, ""
 	}
 
 	success := tryModel(r.cfg.Ollama.GenerationModel, false)
 	var handled bool
 	var result executor.RunResult
+	var rejectReason string
 
-	if success && verifyCommand(generated) {
-		handled, result = executeAndCheck()
-		if handled {
-			r.recordGenerated(generated)
-			r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
-			return
-		}
-	}
-
-	if r.cfg.Ollama.FallbackModel != "" && r.cfg.Ollama.FallbackModel != r.cfg.Ollama.GenerationModel {
-		success = tryModel(r.cfg.Ollama.FallbackModel, true)
-		if success && verifyCommand(generated) {
-			handled, result = executeAndCheck()
+	if success {
+		if verifyCommand(generated) {
+			handled, result, rejectReason = executeAndCheck()
 			if handled {
 				r.recordGenerated(generated)
 				r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
 				return
 			}
+		} else {
+			rejectReason = "The Semantic Judge rejected this command because it does not achieve the user's goal."
 		}
 	}
 
-	if !success && !handled {
+	if (!success || (!handled && rejectReason != "")) && r.cfg.Ollama.FallbackModel != "" && r.cfg.Ollama.FallbackModel != r.cfg.Ollama.GenerationModel {
+		success = tryModel(r.cfg.Ollama.FallbackModel, true)
+		if success {
+			if verifyCommand(generated) {
+				handled, result, rejectReason = executeAndCheck()
+				if handled {
+					r.recordGenerated(generated)
+					r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
+					return
+				}
+			} else {
+				rejectReason = "The Semantic Judge rejected this command because it does not achieve the user's goal."
+			}
+		}
+	}
+
+	if !success {
 		fmt.Println("[nsh] Could not translate that request into a command.")
 		return
 	}
@@ -549,10 +572,14 @@ func (r *REPL) handleNL(input string) {
 		maxRetries = 1
 	}
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		reason := result.Output
+		reason := rejectReason
 		if reason == "" {
-			reason = fmt.Sprintf("exit code %d or command produced empty output", result.ExitCode)
+			reason = result.Output
+			if reason == "" {
+				reason = fmt.Sprintf("exit code %d", result.ExitCode)
+			}
 		}
+		
 		fmt.Printf("[nsh] retrying (%d/%d)...", attempt+1, maxRetries)
 		repaired, newMsgs, rerr := r.ollama.Repair(ctx, msgs, reason)
 		fmt.Print("\r                         \r")
@@ -562,7 +589,7 @@ func (r *REPL) handleNL(input string) {
 		generated = repaired.Join()
 		msgs = newMsgs
 		
-		handled, result = executeAndCheck()
+		handled, result, rejectReason = executeAndCheck()
 		if handled {
 			break
 		}
