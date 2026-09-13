@@ -20,6 +20,7 @@ import (
 	"github.com/nsh-terminal/nsh/internal/ground"
 	"github.com/nsh-terminal/nsh/internal/history"
 	"github.com/nsh-terminal/nsh/internal/ollama"
+	"github.com/nsh-terminal/nsh/internal/rag"
 	"github.com/nsh-terminal/nsh/internal/scratch"
 	"github.com/nsh-terminal/nsh/internal/search"
 	"github.com/nsh-terminal/nsh/internal/workflow"
@@ -41,12 +42,14 @@ type REPL struct {
 	recorded    []string
 	ollamaOK    bool
 	services    *executor.ServiceRunner
+	ragStore    *rag.Store
 }
 
 func New(cfg config.Config) *REPL {
 	configDir := config.Dir()
 	histDir := filepath.Join(configDir, "history")
 	wfDir := filepath.Join(configDir, "workflows")
+	ragDir := filepath.Join(configDir, "rag")
 
 	wfMgr := workflow.New(wfDir)
 	ollamaClient := ollama.New(
@@ -68,6 +71,8 @@ func New(cfg config.Config) *REPL {
 	hist.Rotate(cfg.History.RetentionDays)
 
 	cat := categorizer.New(ollamaClient)
+	
+	rStore, _ := rag.NewStore(ragDir)
 
 	r := &REPL{
 		cfg:         cfg,
@@ -81,6 +86,7 @@ func New(cfg config.Config) *REPL {
 		scratch:     scratch.NewRunner(cfg.Scratch.Dir, cfg.Scratch.Python),
 		ollamaOK:    ollamaClient.CheckHealth(),
 		services:    executor.NewServiceRunner(),
+		ragStore:    rStore,
 	}
 	r.autoDetectModel()
 	return r
@@ -794,6 +800,8 @@ func (r *REPL) handleBuiltin(input string) {
 		r.handleDeleteWorkflow(args)
 	case "history":
 		r.handleHistory(args)
+	case "doc":
+		r.handleDoc(args)
 	case "replay":
 		r.handleReplay(args)
 	case "config":
