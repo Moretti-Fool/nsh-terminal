@@ -18,7 +18,8 @@ A cross-platform terminal that understands both shell commands and natural langu
 - **Structured History & Auto-Categorization Agent** — Background Auto-Categorization engine dynamically organizes command history by communicating with the local LLM async. Browse by day, search across domains, and replay past commands.
 - **RAG OS/Shell Filtering** — When retrieving context for AI features, nsh intelligently filters the vector store based on the active OS and shell environment, ensuring highly relevant responses.
 - **Robust JSON Extraction** — Employs a resilient plan parsing logic that grabs the last valid JSON object in a response (often the final generation) and safely falls back to the first.
-- **Double Ladder Fallback** — Specify a fallback model in config (`fallback_model`) that nsh automatically switches to if the primary generation model fails.
+- **Semantic Caching & Verification (LLM Router)** — Uses a lightning-fast sub-billion parameter model (`qwen2.5:0.5b`) to judge intents. It acts as an instant Semantic Cache to bypass generation, verifies commands before execution, and automatically triggers fallbacks for "empty" shell outputs.
+- **Double Ladder Fallback** — Specify a fallback model in config (`fallback_model`) that nsh automatically switches to if the primary generation model fails or produces a completely blank output.
 - **Automated Fine-Tuning Pipeline** — Import `.jsonl` datasets with `nsh learn-import` to fine-tune the system's local memory and improve performance on custom tasks.
 - **Destructive Command Safety** — Detects dangerous commands (`rm -rf`, `DROP TABLE`, etc.) and asks for confirmation.
 - **Graceful Degradation** — Works as a normal shell even when Ollama isn't running. NL features simply become unavailable.

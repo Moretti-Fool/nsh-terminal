@@ -331,75 +331,35 @@ func (r *REPL) handleCommand(input string) {
 	r.saveHistory(input, "command", "", result.ExitCode, preview, result.DurationMs)
 }
 
-func isStopWord(w string) bool {
-	stops := map[string]bool{
-		"command": true, "which": true, "was": true, "used": true, "to": true,
-		"know": true, "my": true, "for": true, "the": true, "what": true,
-		"is": true, "how": true, "do": true, "i": true, "show": true, "me": true,
-		"commands": true, "in": true, "under": true, "list": true, "find": true,
-	}
-	return stops[w]
-}
-
-func matchNLQuery(query string, pastEntries []history.Entry) string {
+func (r *REPL) semanticCacheMatch(ctx context.Context, query string, pastEntries []history.Entry) string {
 	q := strings.ToLower(strings.TrimSpace(query))
-	// 1. Exact match
+	// 1. Exact match (instant return, zero compute)
 	for _, e := range pastEntries {
 		if strings.ToLower(strings.TrimSpace(e.Input)) == q {
 			return e.Generated
 		}
 	}
 	
-	// 2. Token overlap excluding stop words
-	qFields := strings.Fields(q)
-	qTokens := make(map[string]bool)
-	validQTokens := 0
-	for _, tk := range qFields {
-		if !isStopWord(tk) {
-			qTokens[tk] = true
-			validQTokens++
-		}
+	// 2. LLM Semantic Judge
+	// Check up to 5 unique recent queries
+	judgeModel := r.cfg.Ollama.JudgeModel
+	if judgeModel == "" {
+		judgeModel = "qwen2.5:0.5b"
 	}
-
-	if validQTokens == 0 {
-		return ""
-	}
-
-	bestScore := 0.0
-	bestGen := ""
+	
+	checked := 0
 	for _, e := range pastEntries {
-		eFields := strings.Fields(strings.ToLower(strings.TrimSpace(e.Input)))
-		if len(eFields) == 0 {
-			continue
+		if checked >= 5 {
+			break
 		}
+		checked++
 		
-		overlap := 0
-		validETokens := 0
-		for _, tk := range eFields {
-			if !isStopWord(tk) {
-				validETokens++
-				if qTokens[tk] {
-					overlap++
-				}
-			}
-		}
-		
-		if validETokens == 0 {
-			continue
-		}
-
-		// Calculate Dice Coefficient or Jaccard
-		score := float64(overlap*2) / float64(validQTokens+validETokens)
-		if score > bestScore {
-			bestScore = score
-			bestGen = e.Generated
+		prompt := fmt.Sprintf("Are these two requests asking for the exact same shell action? Request 1: '%s'. Request 2: '%s'. Reply ONLY 'YES' or 'NO'.", query, e.Input)
+		if r.ollama.AskJudge(ctx, judgeModel, prompt) {
+			return e.Generated
 		}
 	}
 	
-	// If the core non-stop-word tokens match significantly (>= 50%)
-	if bestScore >= 0.50 {
-		return bestGen
-	}
 	return ""
 }
 
@@ -409,8 +369,11 @@ func (r *REPL) handleNL(input string) {
 		return
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(r.cfg.Ollama.TimeoutMs)*time.Millisecond)
+	defer cancel()
+
 	// 1. Check local cache layer for exact or very similar past commands
-	cachedCmd := matchNLQuery(input, r.history.SuccessfulNL(200))
+	cachedCmd := r.semanticCacheMatch(ctx, input, r.history.SuccessfulNL(200))
 	if cachedCmd != "" {
 		fmt.Printf("\n[nsh] (from memory) \033[36m> %s\033[0m\n", cachedCmd)
 		if r.confirmIfDestructive(cachedCmd) {
@@ -432,7 +395,7 @@ func (r *REPL) handleNL(input string) {
 		return
 	}
 
-	ctx := context.Background()
+
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -516,35 +479,71 @@ func (r *REPL) handleNL(input string) {
 		return true
 	}
 
-	success := tryModel(r.cfg.Ollama.GenerationModel, false)
-	if !success && r.cfg.Ollama.FallbackModel != "" && r.cfg.Ollama.FallbackModel != r.cfg.Ollama.GenerationModel {
-		success = tryModel(r.cfg.Ollama.FallbackModel, true)
+	judgeModel := r.cfg.Ollama.JudgeModel
+	if judgeModel == "" {
+		judgeModel = "qwen2.5:0.5b"
 	}
 
-	if !success {
+	verifyCommand := func(cmd string) bool {
+		verifyPrompt := fmt.Sprintf("The user requested: '%s'. The AI generated this shell command: '%s'. Does this command achieve the user's goal? Reply ONLY 'YES' or 'NO'.", input, cmd)
+		return r.ollama.AskJudge(ctx, judgeModel, verifyPrompt)
+	}
+
+	executeAndCheck := func() (bool, executor.RunResult) {
+		if plan.Explanation != "" {
+			fmt.Printf("[nsh] %s\n", plan.Explanation)
+		}
+		if r.cfg.UI.ShowGeneratedCommand {
+			fmt.Printf("\033[36m> %s\033[0m\n", generated)
+		}
+		if !r.confirmIfDestructive(generated) {
+			return true, executor.RunResult{}
+		}
+
+		ok, result := r.runGeneratedCommands(generated)
+		
+		if ok && strings.TrimSpace(result.Output) == "" {
+			emptyPrompt := fmt.Sprintf("The user requested: '%s'. The command '%s' executed successfully but returned absolutely no output. Given the user's request, is a completely blank output the correct and expected behavior? Reply ONLY 'YES' or 'NO'.", input, generated)
+			if !r.ollama.AskJudge(ctx, judgeModel, emptyPrompt) {
+				fmt.Println("[nsh] Command returned no output, attempting alternative...")
+				return false, result
+			}
+		}
+		
+		return ok, result
+	}
+
+	success := tryModel(r.cfg.Ollama.GenerationModel, false)
+	var handled bool
+	var result executor.RunResult
+
+	if success && verifyCommand(generated) {
+		handled, result = executeAndCheck()
+		if handled {
+			r.recordGenerated(generated)
+			r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
+			return
+		}
+	}
+
+	if r.cfg.Ollama.FallbackModel != "" && r.cfg.Ollama.FallbackModel != r.cfg.Ollama.GenerationModel {
+		success = tryModel(r.cfg.Ollama.FallbackModel, true)
+		if success && verifyCommand(generated) {
+			handled, result = executeAndCheck()
+			if handled {
+				r.recordGenerated(generated)
+				r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
+				return
+			}
+		}
+	}
+
+	if !success && !handled {
 		fmt.Println("[nsh] Could not translate that request into a command.")
 		return
 	}
 
-	if plan.Explanation != "" {
-		fmt.Printf("[nsh] %s\n", plan.Explanation)
-	}
-
-	if r.cfg.UI.ShowGeneratedCommand {
-		fmt.Printf("\033[36m> %s\033[0m\n", generated)
-	}
-	if !r.confirmIfDestructive(generated) {
-		return
-	}
-
-	ok, result := r.runGeneratedCommands(generated)
-	if ok {
-		r.recordGenerated(generated)
-		r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
-		return
-	}
-
-	// Agentic repair loop: retry up to MaxRetries times, feeding errors back.
+	// Agentic repair loop
 	maxRetries := r.cfg.Ollama.MaxRetries
 	if maxRetries <= 0 {
 		maxRetries = 1
@@ -552,7 +551,7 @@ func (r *REPL) handleNL(input string) {
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		reason := result.Output
 		if reason == "" {
-			reason = fmt.Sprintf("exit code %d", result.ExitCode)
+			reason = fmt.Sprintf("exit code %d or command produced empty output", result.ExitCode)
 		}
 		fmt.Printf("[nsh] retrying (%d/%d)...", attempt+1, maxRetries)
 		repaired, newMsgs, rerr := r.ollama.Repair(ctx, msgs, reason)
@@ -562,14 +561,9 @@ func (r *REPL) handleNL(input string) {
 		}
 		generated = repaired.Join()
 		msgs = newMsgs
-		if r.cfg.UI.ShowGeneratedCommand {
-			fmt.Printf("\033[36m> %s\033[0m\n", generated)
-		}
-		if !r.confirmIfDestructive(generated) {
-			return
-		}
-		ok, result = r.runGeneratedCommands(generated)
-		if ok {
+		
+		handled, result = executeAndCheck()
+		if handled {
 			break
 		}
 	}

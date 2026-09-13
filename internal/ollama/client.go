@@ -318,6 +318,21 @@ func (c *Client) DoGenerateRaw(ctx context.Context, prompt string, format json.R
 	return resp.Response, nil
 }
 
+func (c *Client) AskJudge(ctx context.Context, judgeModel string, prompt string) bool {
+	req := generateRequest{
+		Model:   judgeModel,
+		Prompt:  prompt,
+		Stream:  false,
+		Options: map[string]any{"temperature": 0.0, "num_predict": 10},
+	}
+	resp, err := c.doGenerate(ctx, req)
+	if err != nil {
+		return false
+	}
+	res := strings.TrimSpace(strings.ToUpper(resp.Response))
+	return strings.HasPrefix(res, "YES")
+}
+
 func (c *Client) Ask(ctx context.Context, prompt string) (string, error) {
 	req := generateRequest{
 		Model:  c.generationModel,
