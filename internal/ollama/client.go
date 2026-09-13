@@ -365,6 +365,21 @@ func (c *Client) CheckHealth() bool {
 	return resp.StatusCode == http.StatusOK
 }
 
+func (c *Client) DoGenerateRaw(ctx context.Context, prompt string, format string) (string, error) {
+	resp, err := c.doGenerate(ctx, generateRequest{
+		Model:     c.classifierModel,
+		Prompt:    prompt,
+		Format:    format,
+		Stream:    false,
+		Options:   genOptions(),
+		KeepAlive: "10m",
+	})
+	if err != nil {
+		return "", err
+	}
+	return resp.Response, nil
+}
+
 func (c *Client) doGenerate(ctx context.Context, req generateRequest) (*generateResponse, error) {
 	jsonBody, err := json.Marshal(req)
 	if err != nil {

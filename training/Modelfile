@@ -1,4 +1,4 @@
-FROM ./output/nsh-qwen-f16.gguf
+FROM ./output/nsh-qwen-v2-f16.gguf
 
 TEMPLATE """{{- if .Messages }}
 {{- if or .System .Tools }}<|im_start|>system

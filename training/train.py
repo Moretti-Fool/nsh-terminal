@@ -4,13 +4,14 @@ from datasets import load_dataset
 from trl import SFTTrainer, SFTConfig
 from unsloth import FastLanguageModel
 
-max_length = 512
-dtype = None
+max_seq_length = 512
+dtype = torch.float16
 load_in_4bit = True
 
 print("Loading base model...")
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name = "Qwen/Qwen2.5-1.5B-Instruct",
+    model_name = "Qwen/Qwen2.5-0.5B-Instruct",
+    max_seq_length = max_seq_length,
     dtype = dtype,
     load_in_4bit = load_in_4bit,
 )
@@ -21,11 +22,11 @@ tokenizer.pad_token_id = tokenizer.eos_token_id
 print("Configuring LoRA...")
 model = FastLanguageModel.get_peft_model(
     model,
-    r = 32,
+    r = 16,
     target_modules = ["q_proj", "k_proj", "v_proj", "o_proj",
                       "gate_proj", "up_proj", "down_proj",],
     lora_alpha = 16,
-    lora_dropout = 0.05,
+    lora_dropout = 0,
     bias = "none",
     use_gradient_checkpointing = "unsloth",
     random_state = 3407,
@@ -84,9 +85,9 @@ print("Starting training...")
 trainer_stats = trainer.train()
 
 print("Saving LoRA adapter...")
-model.save_pretrained("output/nsh-qwen-lora")
-tokenizer.save_pretrained("output/nsh-qwen-lora")
+model.save_pretrained("output/nsh-qwen-v2-lora")
+tokenizer.save_pretrained("output/nsh-qwen-v2-lora")
 
 print("Merging LoRA back into base model and saving...")
-model.save_pretrained_merged("output/nsh-qwen-merged", tokenizer, save_method = "merged_16bit")
+model.save_pretrained_merged("output/nsh-qwen-v2-merged", tokenizer, save_method = "merged_16bit")
 print("Done!")

@@ -65,7 +65,9 @@ Interactive commands:
   nsh record start          start recording a workflow
   nsh record stop "name"    save recorded workflow
   nsh workflows             list saved workflows
-  nsh history               browse command history
+  nsh history               browse auto-categorized command history
+  nsh categories            list auto-categorized command domains
+  nsh categories <domain>   search commands within a domain
   nsh theme <name>          switch color theme (default, blue, cyan, ...)
   nsh config                open config file in editor
   exit                      quit nsh

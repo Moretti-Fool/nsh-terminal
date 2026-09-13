@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/chzyer/readline"
+	"github.com/nsh-terminal/nsh/internal/categorizer"
 	"github.com/nsh-terminal/nsh/internal/classifier"
 	"github.com/nsh-terminal/nsh/internal/config"
 	"github.com/nsh-terminal/nsh/internal/executor"
@@ -27,18 +28,19 @@ import (
 const Version = "1.1.0"
 
 type REPL struct {
-	cfg        config.Config
-	classifier *classifier.Classifier
-	executor   *executor.Executor
-	ollama     *ollama.Client
-	history    *history.History
-	workflows  *workflow.Manager
-	search     *search.Handler
-	scratch    *scratch.Runner
-	recording  atomic.Bool
-	recorded   []string
-	ollamaOK   bool
-	services   *executor.ServiceRunner
+	cfg         config.Config
+	classifier  *classifier.Classifier
+	executor    *executor.Executor
+	ollama      *ollama.Client
+	categorizer *categorizer.Categorizer
+	history     *history.History
+	workflows   *workflow.Manager
+	search      *search.Handler
+	scratch     *scratch.Runner
+	recording   atomic.Bool
+	recorded    []string
+	ollamaOK    bool
+	services    *executor.ServiceRunner
 }
 
 func New(cfg config.Config) *REPL {
@@ -65,16 +67,20 @@ func New(cfg config.Config) *REPL {
 	hist := history.New(histDir, cfg.History.OutputPreviewChars)
 	hist.Rotate(cfg.History.RetentionDays)
 
+	cat := categorizer.New(ollamaClient)
+
 	r := &REPL{
-		cfg:        cfg,
-		classifier: classifier.New(pathLookup, wfMgr.Names()),
-		executor:   exec,
-		ollama:     ollamaClient,
-		history:    hist,
-		workflows:  wfMgr,
-		search:     search.New(cfg.Search.Engines, cfg.Search.DefaultEngine),
-		scratch:    scratch.NewRunner(cfg.Scratch.Dir, cfg.Scratch.Python),
-		ollamaOK:   ollamaClient.CheckHealth(),
+		cfg:         cfg,
+		classifier:  classifier.New(pathLookup, wfMgr.Names()),
+		executor:    exec,
+		ollama:      ollamaClient,
+		categorizer: cat,
+		history:     hist,
+		workflows:   wfMgr,
+		search:      search.New(cfg.Search.Engines, cfg.Search.DefaultEngine),
+		scratch:     scratch.NewRunner(cfg.Scratch.Dir, cfg.Scratch.Python),
+		ollamaOK:    ollamaClient.CheckHealth(),
+		services:    executor.NewServiceRunner(exec),
 	}
 	r.autoDetectModel()
 	return r
@@ -683,6 +689,8 @@ func (r *REPL) handleBuiltin(input string) {
 		r.handleSaveLast(args)
 	case "workflows":
 		r.handleListWorkflows()
+	case "categories":
+		r.handleCategories(args)
 	case "edit":
 		r.handleEditWorkflow(args)
 	case "delete":
@@ -873,6 +881,38 @@ func (r *REPL) handleListWorkflows() {
 			desc = fmt.Sprintf("%d steps", len(wf.Steps))
 		}
 		fmt.Printf("  %-20s %s\n", wf.Name, desc)
+	}
+}
+
+func (r *REPL) handleCategories(args []string) {
+	if r.categorizer == nil {
+		fmt.Println("[nsh] Auto-Categorizer is not initialized.")
+		return
+	}
+	if len(args) == 0 {
+		domains := r.categorizer.GetDomainList()
+		if len(domains) == 0 {
+			fmt.Println("No command categories found yet. Run some commands to let the AI categorize them!")
+			return
+		}
+		fmt.Println("\nDiscovered Categories:")
+		for _, d := range domains {
+			count := len(r.categorizer.GetCommandsInDomain(d))
+			fmt.Printf("  - %s (%d commands)\n", d, count)
+		}
+		fmt.Println("\nTo search a domain: nsh categories \"<name>\"")
+		return
+	}
+
+	domain := strings.Join(args, " ")
+	cmds := r.categorizer.GetCommandsInDomain(domain)
+	if len(cmds) == 0 {
+		fmt.Printf("No commands found in category %q.\n", domain)
+		return
+	}
+	fmt.Printf("\nCommands in [%s]:\n", domain)
+	for _, c := range cmds {
+		fmt.Printf("  %s\n", c)
 	}
 }
 
@@ -1345,6 +1385,8 @@ Built-in commands:
   nsh history yesterday          Show yesterday's history
   nsh history week               Show last 7 days
   nsh history YYYY-MM-DD         Show specific date
+  nsh categories                 List auto-categorized command domains
+  nsh categories <domain>        Search commands within a domain
   nsh replay HH:MM               Show details of a command at that time
   nsh replay HH:MM --run         Re-execute that command
   nsh config                     Open config in your editor
@@ -1367,6 +1409,15 @@ func (r *REPL) saveHistory(input, inputType, generated string, exitCode int, out
 		CWD:           cwd,
 		DurationMs:    durationMs,
 	})
+
+	// Dispatch background categorization
+	cmdToCat := input
+	if inputType == "NL" && generated != "" {
+		cmdToCat = generated
+	}
+	if r.categorizer != nil {
+		r.categorizer.CategorizeAsync(cmdToCat, output)
+	}
 }
 
 func pickEditor() string {
