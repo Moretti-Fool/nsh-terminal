@@ -124,6 +124,12 @@ Command: clear
 Command Output: 
 {"category": "Terminal"}
 
+Example 4:
+Existing Categories: ["Version Control", "Network"]
+Command: python --version
+Command Output: Python 3.12.2
+{"category": "Runtime Environment"}
+
 Now categorize this:
 Existing Categories: %s
 Command: %s%s
