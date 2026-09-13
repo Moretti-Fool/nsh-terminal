@@ -967,20 +967,20 @@ func (r *REPL) handleCategories(args []string) {
 		}
 		fmt.Println("\nDiscovered Categories:")
 		for _, d := range domains {
-			count := len(r.categorizer.GetCommandsInDomain(d))
-			fmt.Printf("  - %s (%d commands)\n", d, count)
+			cmds, _ := r.categorizer.GetCommandsInDomain(d)
+			fmt.Printf("  - %s (%d commands)\n", d, len(cmds))
 		}
 		fmt.Println("\nTo search a domain: nsh categories \"<name>\"")
 		return
 	}
 
 	domain := strings.Join(args, " ")
-	cmds := r.categorizer.GetCommandsInDomain(domain)
+	cmds, actualDomain := r.categorizer.GetCommandsInDomain(domain)
 	if len(cmds) == 0 {
 		fmt.Printf("No commands found in category %q.\n", domain)
 		return
 	}
-	fmt.Printf("\nCommands in [%s]:\n", domain)
+	fmt.Printf("\nCommands in [%s]:\n", actualDomain)
 	for _, c := range cmds {
 		fmt.Printf("  %s\n", c)
 	}

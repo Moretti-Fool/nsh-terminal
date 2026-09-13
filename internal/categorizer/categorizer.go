@@ -152,15 +152,53 @@ func (c *Categorizer) GetDomainList() []string {
 	return out
 }
 
-// GetCommandsInDomain returns all commands categorized under a specific domain
-func (c *Categorizer) GetCommandsInDomain(domain string) []string {
+// GetCommandsInDomain returns all commands categorized under a specific domain (uses fuzzy matching)
+func (c *Categorizer) GetCommandsInDomain(domain string) ([]string, string) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	
+	// First, find the closest matching category
+	bestMatch := ""
+	bestScore := -1
+	lowerQuery := strings.ToLower(domain)
+	
+	for _, cat := range c.categories {
+		lowerCat := strings.ToLower(cat)
+		if lowerCat == lowerQuery {
+			bestMatch = cat
+			break
+		}
+		// Basic fuzzy matching: check if one contains the other
+		if strings.Contains(lowerCat, lowerQuery) || strings.Contains(lowerQuery, lowerCat) {
+			if bestScore < 10 {
+				bestScore = 10
+				bestMatch = cat
+			}
+		}
+		// Token overlap for typos like "version controll" -> "version control"
+		overlap := 0
+		for _, w1 := range strings.Fields(lowerQuery) {
+			for _, w2 := range strings.Fields(lowerCat) {
+				if w1 == w2 || strings.HasPrefix(w1, w2) || strings.HasPrefix(w2, w1) {
+					overlap++
+				}
+			}
+		}
+		if overlap > bestScore {
+			bestScore = overlap
+			bestMatch = cat
+		}
+	}
+	
+	if bestMatch == "" {
+		return nil, domain
+	}
+
 	var out []string
 	for cmd, cat := range c.history {
-		if strings.EqualFold(cat, domain) {
+		if strings.EqualFold(cat, bestMatch) {
 			out = append(out, cmd)
 		}
 	}
-	return out
+	return out, bestMatch
 }
