@@ -131,6 +131,23 @@ func (h *History) Search(query string, limit int) []Entry {
 	return results
 }
 
+// Clear deletes all history files.
+func (h *History) Clear() error {
+	entries, err := os.ReadDir(h.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".jsonl") {
+			os.Remove(filepath.Join(h.dir, entry.Name()))
+		}
+	}
+	return nil
+}
+
 func (h *History) Rotate(retentionDays int) error {
 	entries, err := os.ReadDir(h.dir)
 	if err != nil {
