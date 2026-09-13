@@ -412,6 +412,19 @@ func (c *Client) DoGenerateRaw(ctx context.Context, prompt string, format json.R
 	return resp.Response, nil
 }
 
+func (c *Client) Ask(ctx context.Context, prompt string) (string, error) {
+	req := generateRequest{
+		Model:  c.generationModel,
+		Prompt: prompt,
+		Stream: false,
+	}
+	resp, err := c.doGenerate(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(resp.Response), nil
+}
+
 func (c *Client) doGenerate(ctx context.Context, req generateRequest) (*generateResponse, error) {
 	jsonBody, err := json.Marshal(req)
 	if err != nil {

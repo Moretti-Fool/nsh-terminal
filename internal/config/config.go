@@ -26,6 +26,7 @@ type OllamaConfig struct {
 	URL             string `toml:"url"`
 	ClassifierModel string `toml:"classifier_model"`
 	GenerationModel string `toml:"generation_model"`
+	FallbackModel   string `toml:"fallback_model"`
 	TimeoutMs       int    `toml:"timeout_ms"`
 	MaxRetries      int    `toml:"max_retries"`
 }
