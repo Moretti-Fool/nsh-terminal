@@ -133,11 +133,36 @@ func extractJSONObject(s string) string {
 	if strings.HasPrefix(s, "```") {
 		s = SanitizeGenerated(s)
 	}
-	start := strings.Index(s, "{")
-	end := strings.LastIndex(s, "}")
-	if start >= 0 && end > start {
-		return s[start : end+1]
+
+	// Try extracting the LAST JSON object (often the final plan)
+	lastStart := strings.LastIndex(s, "{")
+	lastEnd := strings.LastIndex(s, "}")
+	if lastStart >= 0 && lastEnd > lastStart {
+		cand := s[lastStart : lastEnd+1]
+		if json.Valid([]byte(cand)) {
+			return cand
+		}
 	}
+
+	// Fallback to extracting the FIRST JSON object
+	start := strings.Index(s, "{")
+	if start >= 0 && lastEnd > start {
+		cand := s[start : lastEnd+1]
+		if json.Valid([]byte(cand)) {
+			return cand
+		}
+		
+		// What if the text is like {} ... {}? Try matching first { to the nearest }
+		for i := start + 1; i <= lastEnd; i++ {
+			if s[i] == '}' {
+				cand = s[start : i+1]
+				if json.Valid([]byte(cand)) {
+					return cand
+				}
+			}
+		}
+	}
+
 	return ""
 }
 

@@ -589,6 +589,9 @@ func (r *REPL) nlFewShots(ctx context.Context, input string) []ollama.FewShot {
 					out = append(out, ollama.FewShot{Input: res.Chunk.Text, Command: cmd})
 				}
 			}
+			if len(out) > 0 {
+				fmt.Printf("[nsh] Retrieved %d context examples from RAG memory...\n", len(out))
+			}
 		}
 	}
 
