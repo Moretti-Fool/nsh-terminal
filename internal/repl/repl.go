@@ -252,6 +252,11 @@ func (r *REPL) printWelcome() {
 	fmt.Println()
 }
 
+// HandleInputForCLI is exported for non-interactive executions (e.g. -c flag).
+func (r *REPL) HandleInputForCLI(input string) {
+	r.handleInput(input)
+}
+
 func (r *REPL) handleInput(input string) {
 	if input == "--help" || input == "-h" || input == "help" {
 		r.printHelp()
@@ -1394,6 +1399,7 @@ func (r *REPL) handleSetModel(args []string) {
 		fmt.Println("[nsh] Usage:")
 		fmt.Println("  nsh model <name>              Set generation model")
 		fmt.Println("  nsh model classifier <name>   Set classifier model")
+		fmt.Println("  nsh model fallback <name>     Set fallback model")
 		fmt.Printf("\n  Current generation:  %s\n", r.ollama.GenerationModel())
 		fmt.Printf("  Current classifier:  %s\n", r.ollama.ClassifierModel())
 		return
@@ -1406,13 +1412,23 @@ func (r *REPL) handleSetModel(args []string) {
 		r.ollama.SetClassifierModel(args[1])
 		r.cfg.Ollama.ClassifierModel = args[1]
 		config.Save(r.cfg, filepath.Join(config.Dir(), "config.toml"))
-		fmt.Printf("[nsh] Classifier model set to: %s\n", args[1])
+		fmt.Printf("[nsh] Classifier model set to %s\n", args[1])
+		return
+	}
+	if args[0] == "fallback" {
+		if len(args) < 2 {
+			fmt.Println("[nsh] Usage: nsh model fallback <name>")
+			return
+		}
+		r.cfg.Ollama.FallbackModel = args[1]
+		config.Save(r.cfg, filepath.Join(config.Dir(), "config.toml"))
+		fmt.Printf("[nsh] Fallback model set to %s\n", args[1])
 		return
 	}
 	r.ollama.SetGenerationModel(args[0])
 	r.cfg.Ollama.GenerationModel = args[0]
 	config.Save(r.cfg, filepath.Join(config.Dir(), "config.toml"))
-	fmt.Printf("[nsh] Generation model set to: %s\n", args[0])
+	fmt.Printf("[nsh] Generation model set to %s\n", args[0])
 }
 
 func (r *REPL) handleTheme(args []string) {

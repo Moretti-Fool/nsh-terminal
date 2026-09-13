@@ -17,6 +17,13 @@ func main() {
 		case "--version", "-v":
 			fmt.Printf("nsh %s\n", repl.Version)
 			return
+		case "-c":
+			if len(os.Args) > 2 {
+				cfg, _ := config.EnsureDefaults()
+				r := repl.New(cfg)
+				r.HandleInputForCLI(os.Args[2])
+			}
+			return
 		}
 	}
 

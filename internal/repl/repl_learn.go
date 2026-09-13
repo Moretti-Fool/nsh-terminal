@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/nsh-terminal/nsh/internal/rag"
 )
@@ -108,17 +109,24 @@ func (r *REPL) handleLearnImport(args []string) {
 			if !ok {
 				continue
 			}
-			role := m["role"].(string)
-			content := m["content"].(string)
+			role, _ := m["role"].(string)
+			content, _ := m["content"].(string)
+			if role == "" {
+				continue
+			}
 
-			if role == "user" {
-				nl = content
+			if role == "user" && nl == "" {
+				nl = content // Only take the FIRST user message (the actual intent)
 			} else if role == "assistant" {
-				// Parse command JSON
+				// Parse command JSON (take the LAST successful one, overwriting any failed attempts)
 				var cmdJSON map[string]interface{}
 				if json.Unmarshal([]byte(content), &cmdJSON) == nil {
 					if cmds, ok := cmdJSON["commands"].([]interface{}); ok && len(cmds) > 0 {
-						cmd = cmds[0].(string)
+						var cmdLines []string
+						for _, cInt := range cmds {
+							cmdLines = append(cmdLines, cInt.(string))
+						}
+						cmd = strings.Join(cmdLines, "; ")
 					}
 				}
 			}
