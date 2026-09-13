@@ -967,7 +967,8 @@ func builtinFindContent(dir string, keywords []string, start time.Time) (RunResu
 		}
 
 		base := filepath.Base(path)
-		if strings.HasPrefix(base, ".") && path != dir && path != "." {
+		lowerBase := strings.ToLower(base)
+		if (strings.HasPrefix(base, ".") && path != dir && path != ".") || lowerBase == "node_modules" || lowerBase == "vendor" || lowerBase == "venv" || lowerBase == "build" || lowerBase == "dist" {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
