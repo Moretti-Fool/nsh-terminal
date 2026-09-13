@@ -16,6 +16,7 @@ var (
 	tagRegex         = regexp.MustCompile(`(?is)<[^>]+>`)
 	spaceRegex       = regexp.MustCompile(`[ \t]+`)
 	newlineRegex     = regexp.MustCompile(`\n{3,}`)
+	titleRegex       = regexp.MustCompile(`(?is)<title>(.*?)</title>`)
 )
 
 func ScrapeAndChunk(url string) (Document, []string, error) {
@@ -44,7 +45,7 @@ func ScrapeAndChunk(url string) (Document, []string, error) {
 
 	// Very basic title extraction
 	title := url
-	titleMatch := regexp.MustCompile(`(?is)<title>(.*?)</title>`).FindStringSubmatch(html)
+	titleMatch := titleRegex.FindStringSubmatch(html)
 	if len(titleMatch) > 1 {
 		title = strings.TrimSpace(titleMatch[1])
 	}

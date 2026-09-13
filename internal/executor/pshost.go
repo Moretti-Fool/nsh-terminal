@@ -192,6 +192,7 @@ func startPSHost() (*psHost, error) {
 			err = io.EOF
 		}
 		h.lines <- lineResult{err: err}
+		close(h.lines)
 	}()
 
 	timer := time.NewTimer(psReadyTimeout)
@@ -247,9 +248,11 @@ func (h *psHost) run(command, cwd string) (RunResult, error) {
 		select {
 		case got, ok := <-h.lines:
 			if !ok {
+				_ = h.killUnlocked()
 				return RunResult{Output: outBuf.String() + h.errBuf.StringAndReset(), ExitCode: 1, DurationMs: time.Since(start).Milliseconds()}, fmt.Errorf("powershell host closed")
 			}
 			if got.err != nil {
+				_ = h.killUnlocked()
 				return RunResult{Output: outBuf.String() + h.errBuf.StringAndReset(), ExitCode: 1, DurationMs: time.Since(start).Milliseconds()}, got.err
 			}
 			if idx := strings.Index(got.line, marker); idx != -1 {

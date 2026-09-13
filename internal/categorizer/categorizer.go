@@ -69,7 +69,11 @@ func (c *Categorizer) save() {
 		History:    c.history,
 	}
 	b, _ := json.MarshalIndent(state, "", "  ")
-	os.WriteFile(path, b, 0644)
+	
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, b, 0644); err == nil {
+		os.Rename(tmpPath, path)
+	}
 }
 
 func (c *Categorizer) CategorizeAsync(command, generated, output string) {

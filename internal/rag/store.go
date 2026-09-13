@@ -2,6 +2,7 @@ package rag
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -55,7 +56,9 @@ func NewStore(dataDir string) (*Store, error) {
 func (s *Store) load() {
 	b, err := os.ReadFile(s.path)
 	if err == nil {
-		json.Unmarshal(b, &s.db)
+		if err := json.Unmarshal(b, &s.db); err != nil {
+			fmt.Printf("[nsh] Warning: failed to parse RAG database (%s): %v\n", s.path, err)
+		}
 	}
 	if s.db.Documents == nil {
 		s.db.Documents = make(map[string]Document)
@@ -63,11 +66,15 @@ func (s *Store) load() {
 }
 
 func (s *Store) save() error {
-	b, err := json.Marshal(s.db)
+	b, err := json.MarshalIndent(s.db, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, b, 0644)
+	tmpPath := s.path + ".tmp"
+	if err := os.WriteFile(tmpPath, b, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, s.path)
 }
 
 func (s *Store) AddDocument(doc Document, chunks []Chunk) error {
