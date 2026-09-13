@@ -106,29 +106,11 @@ func (c *Categorizer) worker() {
 Choose an exact name from the Existing Categories ONLY if it is a PERFECT, highly specific match.
 Otherwise, invent ONE new specific category (max 2 words, Title Case).
 
-Example 1:
-Existing Categories: ["Terminal", "Network"]
-Command: git status
-Command Output: On branch main
-{"category": "Version Control"}
-
-Example 2:
-Existing Categories: ["Package Management", "Database"]
-Command: npm install
-Command Output: added 50 packages
-{"category": "Package Management"}
-
-Example 3:
-Existing Categories: ["Version Control"]
-Command: clear
-Command Output: 
-{"category": "Terminal"}
-
-Example 4:
-Existing Categories: ["Version Control", "Network"]
-Command: python --version
-Command Output: Python 3.12.2
-{"category": "Runtime Environment"}
+CRITICAL RULES:
+1. Base the category on the broader domain of the command (e.g., "Version Control", "Package Management", "Terminal").
+2. Do not use flag names like --version to determine the category if the command is merely checking an environment runtime. Use a category like "Runtime Environment" or similar.
+3. If the command alters terminal state (like clearing the screen), categorize it under general terminal operations.
+4. Avoid overly specific categories tied to exactly one command (e.g., don't use "Git Status", use "Version Control").
 
 Now categorize this:
 Existing Categories: %s

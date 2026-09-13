@@ -153,11 +153,12 @@ func (c *Client) ClassifyInput(ctx context.Context, input string) (string, error
 	resp, err := c.doGenerate(ctx, generateRequest{
 		Model:  c.classifierModel,
 		Prompt: input,
-		System: `Classify the following input as one of: COMMAND, NL
+		System: `Classify the following input as one of: COMMAND, NL, HISTORY
 COMMAND = the user is invoking a program or builtin (first word is the executable), e.g. git status, ls -la, docker ps
 NL = English describing a goal or asking a question, even if it does not use words like "please" or "show me"
-If the first word is not a real command, classify as NL.
-Respond with JSON {"label":"COMMAND"} or {"label":"NL"}.`,
+HISTORY = the user is asking to search or list past commands, workflows, or categories.
+If the first word is not a real command, classify as NL or HISTORY.
+Respond with JSON {"label":"COMMAND"}, {"label":"NL"}, or {"label":"HISTORY"}.`,
 		Stream:    false,
 		Format:    classifyFormat,
 		Options:   genOptions(),
@@ -172,15 +173,18 @@ Respond with JSON {"label":"COMMAND"} or {"label":"NL"}.`,
 	}
 	if json.Unmarshal([]byte(extractJSONObject(raw)), &dto) == nil {
 		result := strings.ToUpper(strings.TrimSpace(dto.Label))
-		if result == "COMMAND" || result == "NL" {
+		if result == "COMMAND" || result == "NL" || result == "HISTORY" {
 			return result, nil
 		}
 	}
 	result := strings.TrimSpace(strings.ToUpper(raw))
+	if strings.Contains(result, "HISTORY") {
+		return "HISTORY", nil
+	}
 	if strings.Contains(result, "COMMAND") && !strings.Contains(result, "NL") {
 		return "COMMAND", nil
 	}
-	if result != "COMMAND" && result != "NL" {
+	if result != "COMMAND" && result != "NL" && result != "HISTORY" {
 		return "NL", nil
 	}
 	return result, nil
@@ -209,6 +213,24 @@ Respond with just the name or NONE. Nothing else.`, strings.Join(workflows, ", "
 		}
 	}
 	return "", nil
+}
+
+func (c *Client) ExtractDomain(ctx context.Context, input string) (string, error) {
+	resp, err := c.doGenerate(ctx, generateRequest{
+		Model:  c.classifierModel,
+		Prompt: input,
+		System: `Extract the requested category/domain from the user's input.
+If the user says "commands under network", extract "network".
+If the user says "list all git commands", extract "git".
+Respond with just the domain name. Nothing else.`,
+		Stream:    false,
+		Options:   genOptions(),
+		KeepAlive: "10m",
+	})
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(resp.Response), nil
 }
 
 func (c *Client) GeneratePython(ctx context.Context, input string, cwd string) (string, error) {

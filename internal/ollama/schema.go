@@ -26,7 +26,7 @@ var CommandFormat = json.RawMessage(`{
 var classifyFormat = json.RawMessage(`{
   "type": "object",
   "properties": {
-    "label": {"type": "string", "enum": ["COMMAND", "NL"]}
+    "label": {"type": "string", "enum": ["COMMAND", "NL", "HISTORY"]}
   },
   "required": ["label"]
 }`)

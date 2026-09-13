@@ -411,19 +411,6 @@ func (r *REPL) handleNL(input string) {
 		return
 	}
 
-	// 1.5 Intercept natural language requests to list categories
-	lowerInput := strings.ToLower(strings.TrimSpace(input))
-	if strings.HasPrefix(lowerInput, "commands under ") {
-		domain := strings.TrimSpace(lowerInput[15:])
-		r.handleCategories([]string{domain})
-		return
-	}
-	if strings.HasPrefix(lowerInput, "commands in ") {
-		domain := strings.TrimSpace(lowerInput[12:])
-		r.handleCategories([]string{domain})
-		return
-	}
-
 	if !r.ollamaOK {
 		r.ollamaOK = r.ollama.CheckHealth()
 	}
@@ -433,11 +420,22 @@ func (r *REPL) handleNL(input string) {
 		return
 	}
 
+	ctx := context.Background()
+
+	// 1.5 Dynamically check if this is a history/category request
+	class, err := r.ollama.ClassifyInput(ctx, input)
+	if err == nil && class == "HISTORY" {
+		domain, _ := r.ollama.ExtractDomain(ctx, input)
+		if domain != "" {
+			r.handleCategories([]string{domain})
+			return
+		}
+	}
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		cwd = "."
 	}
-	ctx := context.Background()
 	snap := ground.Capture(cwd, r.executor.PathExists)
 	shell := r.executor.NLShellName()
 

@@ -16,10 +16,11 @@ const (
 	Workflow
 	Builtin
 	Ambiguous
+	History
 )
 
 func (t InputType) String() string {
-	names := [...]string{"empty", "command", "nl", "search", "workflow", "builtin", "ambiguous"}
+	names := [...]string{"empty", "command", "nl", "search", "workflow", "builtin", "ambiguous", "history"}
 	if int(t) < len(names) {
 		return names[t]
 	}
