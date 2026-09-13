@@ -80,7 +80,7 @@ func New(cfg config.Config) *REPL {
 		search:      search.New(cfg.Search.Engines, cfg.Search.DefaultEngine),
 		scratch:     scratch.NewRunner(cfg.Scratch.Dir, cfg.Scratch.Python),
 		ollamaOK:    ollamaClient.CheckHealth(),
-		services:    executor.NewServiceRunner(exec),
+		services:    executor.NewServiceRunner(),
 	}
 	r.autoDetectModel()
 	return r

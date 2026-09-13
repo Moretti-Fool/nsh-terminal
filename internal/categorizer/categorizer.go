@@ -108,7 +108,7 @@ Respond in STRICT JSON format: {"category": "Name"}`, string(catList), task.Comm
 
 		// Call the LLM
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		resp, err := c.client.DoGenerateRaw(ctx, prompt, "json")
+		resp, err := c.client.DoGenerateRaw(ctx, prompt, json.RawMessage(`"json"`))
 		cancel()
 
 		if err == nil && resp != "" {

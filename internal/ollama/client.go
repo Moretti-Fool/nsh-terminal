@@ -365,7 +365,7 @@ func (c *Client) CheckHealth() bool {
 	return resp.StatusCode == http.StatusOK
 }
 
-func (c *Client) DoGenerateRaw(ctx context.Context, prompt string, format string) (string, error) {
+func (c *Client) DoGenerateRaw(ctx context.Context, prompt string, format json.RawMessage) (string, error) {
 	resp, err := c.doGenerate(ctx, generateRequest{
 		Model:     c.classifierModel,
 		Prompt:    prompt,
