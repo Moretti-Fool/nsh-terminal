@@ -154,10 +154,11 @@ func (c *Client) ClassifyInput(ctx context.Context, input string) (string, error
 		Model:  c.classifierModel,
 		Prompt: input,
 		System: `Classify the following input as one of: COMMAND, NL, HISTORY
-COMMAND = the user is invoking a program or builtin (first word is the executable), e.g. git status, ls -la, docker ps
-NL = English describing a goal or asking a question, even if it does not use words like "please" or "show me"
-HISTORY = the user is asking to search or list past commands, workflows, or categories.
-If the first word is not a real command, classify as NL or HISTORY.
+COMMAND = the user is invoking a program or builtin (first word is an executable like git, ls, docker)
+HISTORY = the user explicitly asks to view history, saved categories, or previous commands (e.g. "show my history", "list categories", "what are my categories")
+NL = English describing a goal or asking a question (e.g. "what is my ip", "what is running on port 8000", "check disk")
+
+If the input is a question about the system (e.g. "what is running..."), it is NL, NOT HISTORY.
 Respond with JSON {"label":"COMMAND"}, {"label":"NL"}, or {"label":"HISTORY"}.`,
 		Stream:    false,
 		Format:    classifyFormat,

@@ -158,6 +158,8 @@ func (c *Client) Translate(ctx context.Context, req TranslateRequest) (Plan, []C
 	// The LLM can call run_command, list_cwd, netstat, etc. to gather
 	// information before emitting the final JSON command plan.
 	const maxToolRounds = 5
+	pastTools := make(map[string]bool)
+	
 	for round := 0; round < maxToolRounds; round++ {
 		if len(resp.Message.ToolCalls) == 0 && req.RunTool != nil && strings.Contains(resp.Message.Content, "\"run_command\"") {
 			raw := extractJSONObject(resp.Message.Content)
@@ -183,7 +185,17 @@ func (c *Client) Translate(ctx context.Context, req TranslateRequest) (Plan, []C
 			if i >= 5 {
 				break
 			}
-			out := req.RunTool(tc.Function.Name, tc.Function.ArgsMap())
+			
+			// Detect repetition
+			sig := tc.Function.Name + "|" + string(tc.Function.Arguments)
+			var out string
+			if pastTools[sig] {
+				out = "error: You already ran this exact command and it failed or yielded the same result. Do not repeat it. Try a different approach or output the final Plan."
+			} else {
+				pastTools[sig] = true
+				out = req.RunTool(tc.Function.Name, tc.Function.ArgsMap())
+			}
+			
 			msgs = append(msgs, ChatMessage{
 				Role:     "tool",
 				ToolName: tc.Function.Name,
