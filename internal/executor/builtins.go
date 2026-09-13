@@ -968,11 +968,17 @@ func builtinFindContent(dir string, keywords []string, start time.Time) (RunResu
 
 		base := filepath.Base(path)
 		lowerBase := strings.ToLower(base)
-		if (strings.HasPrefix(base, ".") && path != dir && path != ".") || lowerBase == "node_modules" || lowerBase == "vendor" || lowerBase == "venv" || lowerBase == "build" || lowerBase == "dist" {
+		if strings.HasPrefix(base, ".") && path != dir && path != "." {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
+		}
+		
+		if info.IsDir() {
+			if strings.Contains(lowerBase, "venv") || lowerBase == "node_modules" || lowerBase == "vendor" || lowerBase == "build" || lowerBase == "dist" || lowerBase == "out" || lowerBase == "target" || lowerBase == "bin" || lowerBase == "llama.cpp" || strings.Contains(lowerBase, "cache") {
+				return filepath.SkipDir
+			}
 		}
 
 		if info.IsDir() || info.Size() == 0 || info.Size() > maxFileSize {
