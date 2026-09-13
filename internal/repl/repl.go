@@ -445,6 +445,7 @@ func (r *REPL) handleNL(input string) {
 	snap := ground.Capture(cwd, r.executor.PathExists)
 	shell := r.executor.NLShellName()
 
+	var plan ollama.Plan
 	var generated string
 	var msgs []ollama.ChatMessage
 
@@ -513,6 +514,7 @@ func (r *REPL) handleNL(input string) {
 			return false
 		}
 		
+		plan = p
 		generated = gen
 		msgs = m
 		return true
@@ -526,6 +528,10 @@ func (r *REPL) handleNL(input string) {
 	if !success {
 		fmt.Println("[nsh] Could not translate that request into a command.")
 		return
+	}
+
+	if plan.Explanation != "" {
+		fmt.Printf("[nsh] %s\n", plan.Explanation)
 	}
 
 	if r.cfg.UI.ShowGeneratedCommand {

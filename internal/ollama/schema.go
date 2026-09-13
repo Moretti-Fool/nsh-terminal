@@ -11,9 +11,14 @@ import (
 var CommandFormat = json.RawMessage(`{
   "type": "object",
   "properties": {
+    "explanation": {
+      "type": "string",
+      "description": "Optional thought process or explanation for the user."
+    },
     "commands": {
       "type": "array",
-      "items": {"type": "string"}
+      "items": {"type": "string"},
+      "description": "The exact shell commands to execute."
     },
     "dialect": {
       "type": "string",
@@ -41,8 +46,9 @@ var extractDomainFormat = json.RawMessage(`{
 
 // Plan is a free-form command list plus the dialect the model claims to have used.
 type Plan struct {
-	Commands []string `json:"commands"`
-	Dialect  string   `json:"dialect"`
+	Explanation string   `json:"explanation,omitempty"`
+	Commands    []string `json:"commands"`
+	Dialect     string   `json:"dialect"`
 }
 
 func (p Plan) Join() string {
@@ -57,11 +63,12 @@ func (p Plan) Join() string {
 }
 
 type planDTO struct {
-	Commands  any            `json:"commands"`
-	Command   string         `json:"command"`
-	Dialect   string         `json:"dialect"`
-	Name      string         `json:"name"`
-	Arguments any            `json:"arguments"`
+	Explanation string         `json:"explanation,omitempty"`
+	Commands    any            `json:"commands"`
+	Command     string         `json:"command"`
+	Dialect     string         `json:"dialect"`
+	Name        string         `json:"name"`
+	Arguments   any            `json:"arguments"`
 }
 
 // ParsePlan reads constrained JSON, falling back to sanitized plain command text.
@@ -118,8 +125,16 @@ func ParsePlan(s string) (Plan, error) {
 			if dialect == "" {
 				dialect = "powershell"
 			}
-			return Plan{Commands: expanded, Dialect: dialect}, nil
+			return Plan{Commands: expanded, Dialect: dialect, Explanation: dto.Explanation}, nil
 		}
+		if len(cmds) == 0 {
+			return Plan{Explanation: dto.Explanation}, fmt.Errorf("no commands found in plan")
+		}
+		dialect := strings.ToLower(strings.TrimSpace(dto.Dialect))
+		if dialect == "" {
+			dialect = "powershell"
+		}
+		return Plan{Commands: expanded, Dialect: dialect, Explanation: dto.Explanation}, nil
 	}
 
 	text := SanitizeGenerated(s)
