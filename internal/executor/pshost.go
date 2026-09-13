@@ -29,6 +29,7 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 $inbox = $env:NSH_PS_INBOX
 
 function Write-NshDone([string]$Id, [int]$Code) {
+  [Console]::Out.WriteLine()
   [Console]::Out.WriteLine("NSH_DONE|$Id|$Code")
   [Console]::Out.Flush()
 }
@@ -252,12 +253,16 @@ func (h *psHost) run(command, cwd string) (RunResult, error) {
 			if got.err != nil {
 				return RunResult{Output: outBuf.String() + h.errBuf.StringAndReset(), ExitCode: 1, DurationMs: time.Since(start).Milliseconds()}, got.err
 			}
-			if strings.HasPrefix(got.line, marker) {
-				codeStr := strings.TrimPrefix(got.line, marker)
+			if idx := strings.Index(got.line, marker); idx != -1 {
+				codeStr := strings.TrimSpace(got.line[idx+len(marker):])
 				code := 0
 				fmt.Sscanf(codeStr, "%d", &code)
 				stderr := h.errBuf.StringAndReset()
 				output := outBuf.String()
+				// Add whatever preceded the marker to output
+				if idx > 0 {
+					output += got.line[:idx] + "\n"
+				}
 				if stderr != "" {
 					output += stderr
 				}

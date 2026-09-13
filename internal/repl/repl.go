@@ -1315,6 +1315,12 @@ func (r *REPL) handleHistory(args []string) {
 		return
 	}
 	switch args[0] {
+	case "clear":
+		if err := r.history.Clear(); err != nil {
+			fmt.Fprintf(os.Stderr, "[nsh] Failed to clear history: %v\n", err)
+		} else {
+			fmt.Println("[nsh] History cleared. Memory reset.")
+		}
 	case "yesterday":
 		r.printDayHistory(now.AddDate(0, 0, -1), "Yesterday")
 	case "week":
