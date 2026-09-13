@@ -448,6 +448,8 @@ func (r *REPL) handleNL(input string) {
 	var generated string
 	var msgs []ollama.ChatMessage
 
+	fewShots := r.nlFewShots(ctx, input)
+
 	tryModel := func(modelName string, isFallback bool) bool {
 		if isFallback {
 			fmt.Printf("[nsh] Primary model failed, falling back to %s...\n", modelName)
@@ -461,7 +463,7 @@ func (r *REPL) handleNL(input string) {
 		p, m, err := r.ollama.Translate(ctx, ollama.TranslateRequest{
 			Input:    input,
 			Env:      ollama.Env{CWD: snap.CWD, Shell: shell, Listing: snap.Listing, Present: snap.Present},
-			Examples: r.nlFewShots(),
+			Examples: fewShots,
 			RunTool: func(name string, args map[string]any) string {
 				if name == "run_command" {
 					cmdStr := fmt.Sprint(args["command"])
@@ -573,12 +575,30 @@ func (r *REPL) handleNL(input string) {
 	r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
 }
 
-func (r *REPL) nlFewShots() []ollama.FewShot {
-	entries := r.history.SuccessfulNL(3)
-	out := make([]ollama.FewShot, 0, len(entries))
-	for _, e := range entries {
-		out = append(out, ollama.FewShot{Input: e.Input, Command: e.Generated})
+func (r *REPL) nlFewShots(ctx context.Context, input string) []ollama.FewShot {
+	var out []ollama.FewShot
+
+	// If RAG is available, embed and search
+	if r.ragStore != nil {
+		emb, err := r.ollama.GenerateEmbeddings(ctx, "nomic-embed-text", []string{input})
+		if err == nil && len(emb) > 0 {
+			results := r.ragStore.Search(emb[0], 3, "few-shot")
+			for _, res := range results {
+				if cmd, ok := res.Chunk.Metadata["command"]; ok {
+					out = append(out, ollama.FewShot{Input: res.Chunk.Text, Command: cmd})
+				}
+			}
+		}
 	}
+
+	// Fallback to recent history if no RAG results
+	if len(out) == 0 {
+		entries := r.history.SuccessfulNL(3)
+		for _, e := range entries {
+			out = append(out, ollama.FewShot{Input: e.Input, Command: e.Generated})
+		}
+	}
+
 	return out
 }
 
@@ -829,6 +849,10 @@ func (r *REPL) handleBuiltin(input string) {
 		r.handleHistory(args)
 	case "doc":
 		r.handleDoc(args)
+	case "learn":
+		r.handleLearn(args)
+	case "learn-import":
+		r.handleLearnImport(args)
 	case "replay":
 		r.handleReplay(args)
 	case "config":

@@ -10,10 +10,11 @@ import (
 )
 
 type Chunk struct {
-	ID        string    `json:"id"`
-	DocID     string    `json:"doc_id"`
-	Text      string    `json:"text"`
-	Embedding []float32 `json:"embedding"`
+	ID        string            `json:"id"`
+	DocID     string            `json:"doc_id"`
+	Text      string            `json:"text"`
+	Embedding []float32         `json:"embedding"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
 }
 
 type Document struct {
@@ -88,6 +89,14 @@ func (s *Store) AddDocument(doc Document, chunks []Chunk) error {
 	return s.save()
 }
 
+func (s *Store) AddChunk(chunk Chunk) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.db.Chunks = append(s.db.Chunks, chunk)
+	return s.save()
+}
+
 func (s *Store) ListDocuments() []Document {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -120,12 +129,18 @@ func cosineSimilarity(a, b []float32) float32 {
 	return dot / (float32(math.Sqrt(float64(normA))) * float32(math.Sqrt(float64(normB))))
 }
 
-func (s *Store) Search(queryEmbedding []float32, topK int) []SearchResult {
+func (s *Store) Search(queryEmbedding []float32, topK int, filterType string) []SearchResult {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var results []SearchResult
 	for _, chunk := range s.db.Chunks {
+		if filterType != "" {
+			if chunk.Metadata == nil || chunk.Metadata["type"] != filterType {
+				continue
+			}
+		}
+		
 		score := cosineSimilarity(queryEmbedding, chunk.Embedding)
 		results = append(results, SearchResult{Chunk: chunk, Score: score})
 	}
