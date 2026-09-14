@@ -1509,6 +1509,10 @@ func (r *REPL) printHelp() {
 	fmt.Printf(`nsh v%s — the natural shell
 Developed by Sanchit
 
+GitHub Repo: https://github.com/nsh-terminal/nsh
+Supports: nsh custom lora adapter
+Feel free to contribute!
+
 Usage:
   Type commands normally, or use plain English.
   Tab completes paths, builtins, and nsh subcommands.

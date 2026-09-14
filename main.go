@@ -92,6 +92,10 @@ Requirements:
   Ollama (optional) — install from https://ollama.ai for NL features.
   Without Ollama, nsh works as a regular shell with smart routing.
 
+GitHub Repo: https://github.com/nsh-terminal/nsh
+Supports: nsh custom lora adapter
+Feel free to contribute!
+
 Developed by Sanchit
 Report bugs at: https://github.com/nsh-terminal/nsh/issues
 `, repl.Version)
