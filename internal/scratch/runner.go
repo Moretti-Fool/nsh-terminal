@@ -311,6 +311,17 @@ func (r *Runner) refreshInstalled() {
 
 
 func (r *Runner) venvPython() string {
+	candidates := []string{
+		filepath.Join(r.venvDir, "Scripts", "python.exe"),
+		filepath.Join(r.venvDir, "bin", "python.exe"),
+		filepath.Join(r.venvDir, "bin", "python"),
+		filepath.Join(r.venvDir, "bin", "python3"),
+	}
+	for _, cand := range candidates {
+		if _, err := os.Stat(cand); err == nil {
+			return cand
+		}
+	}
 	if runtime.GOOS == "windows" {
 		return filepath.Join(r.venvDir, "Scripts", "python.exe")
 	}
