@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/nsh-terminal/nsh/internal/config"
-	"github.com/nsh-terminal/nsh/internal/repl"
+	"github.com/Moretti-Fool/nsh-terminal/internal/config"
+	"github.com/Moretti-Fool/nsh-terminal/internal/repl"
 )
 
 func main() {
@@ -92,11 +92,11 @@ Requirements:
   Ollama (optional) — install from https://ollama.ai for NL features.
   Without Ollama, nsh works as a regular shell with smart routing.
 
-GitHub Repo: https://github.com/nsh-terminal/nsh
+GitHub Repo: https://github.com/Moretti-Fool/nsh-terminal
 Supports: nsh custom lora adapter
 Feel free to contribute!
 
 Developed by Sanchit
-Report bugs at: https://github.com/nsh-terminal/nsh/issues
+Report bugs at: https://github.com/Moretti-Fool/nsh-terminal/issues
 `, repl.Version)
 }

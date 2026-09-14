@@ -32,13 +32,13 @@ A cross-platform terminal that understands both shell commands and natural langu
 Requires [Go 1.21+](https://go.dev/dl/).
 
 ```bash
-go install github.com/nsh-terminal/nsh@latest
+go install github.com/Moretti-Fool/nsh-terminal@latest
 ```
 
 ### Build from Repository
 
 ```bash
-git clone https://github.com/nsh-terminal/nsh.git
+git clone https://github.com/Moretti-Fool/nsh-terminal.git
 cd nsh
 go build -ldflags="-s -w" -o nsh .
 ```
@@ -50,7 +50,7 @@ The binary will be ~7MB. Move it to a directory in your PATH:
 
 ### Binary Releases
 
-Download pre-built binaries from the [Releases](https://github.com/nsh-terminal/nsh/releases) page.
+Download pre-built binaries from the [Releases](https://github.com/Moretti-Fool/nsh-terminal/releases) page.
 
 ## Requirements
 

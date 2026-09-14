@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/nsh-terminal/nsh/internal/rag"
+	"github.com/Moretti-Fool/nsh-terminal/internal/rag"
 )
 
 func (r *REPL) handleDoc(args []string) {

@@ -3,7 +3,7 @@ package inference
 import (
 	"context"
 
-	"github.com/nsh-terminal/nsh/internal/ollama"
+	"github.com/Moretti-Fool/nsh-terminal/internal/ollama"
 )
 
 // OllamaBackend implements the Backend interface using an ollama.Client.

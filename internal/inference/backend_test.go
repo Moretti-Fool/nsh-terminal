@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nsh-terminal/nsh/internal/ollama"
+	"github.com/Moretti-Fool/nsh-terminal/internal/ollama"
 )
 
 func TestOllamaBackendImplementsBackend(t *testing.T) {

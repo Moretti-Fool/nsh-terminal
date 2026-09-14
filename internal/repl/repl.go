@@ -14,17 +14,17 @@ import (
 	"time"
 
 	"github.com/chzyer/readline"
-	"github.com/nsh-terminal/nsh/internal/categorizer"
-	"github.com/nsh-terminal/nsh/internal/classifier"
-	"github.com/nsh-terminal/nsh/internal/config"
-	"github.com/nsh-terminal/nsh/internal/executor"
-	"github.com/nsh-terminal/nsh/internal/ground"
-	"github.com/nsh-terminal/nsh/internal/history"
-	"github.com/nsh-terminal/nsh/internal/ollama"
-	"github.com/nsh-terminal/nsh/internal/rag"
-	"github.com/nsh-terminal/nsh/internal/scratch"
-	"github.com/nsh-terminal/nsh/internal/search"
-	"github.com/nsh-terminal/nsh/internal/workflow"
+	"github.com/Moretti-Fool/nsh-terminal/internal/categorizer"
+	"github.com/Moretti-Fool/nsh-terminal/internal/classifier"
+	"github.com/Moretti-Fool/nsh-terminal/internal/config"
+	"github.com/Moretti-Fool/nsh-terminal/internal/executor"
+	"github.com/Moretti-Fool/nsh-terminal/internal/ground"
+	"github.com/Moretti-Fool/nsh-terminal/internal/history"
+	"github.com/Moretti-Fool/nsh-terminal/internal/ollama"
+	"github.com/Moretti-Fool/nsh-terminal/internal/rag"
+	"github.com/Moretti-Fool/nsh-terminal/internal/scratch"
+	"github.com/Moretti-Fool/nsh-terminal/internal/search"
+	"github.com/Moretti-Fool/nsh-terminal/internal/workflow"
 )
 
 const Version = "1.1.0"
@@ -1509,7 +1509,7 @@ func (r *REPL) printHelp() {
 	fmt.Printf(`nsh v%s — the natural shell
 Developed by Sanchit
 
-GitHub Repo: https://github.com/nsh-terminal/nsh
+GitHub Repo: https://github.com/Moretti-Fool/nsh-terminal
 Supports: nsh custom lora adapter
 Feel free to contribute!
 

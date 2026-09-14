@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nsh-terminal/nsh/internal/config"
-	"github.com/nsh-terminal/nsh/internal/ollama"
+	"github.com/Moretti-Fool/nsh-terminal/internal/config"
+	"github.com/Moretti-Fool/nsh-terminal/internal/ollama"
 )
 
 type Categorizer struct {
