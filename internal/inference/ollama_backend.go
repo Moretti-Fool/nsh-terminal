@@ -64,9 +64,10 @@ func (b *OllamaBackend) Repair(ctx context.Context, input string, failedCmd stri
 	}, nil
 }
 
-// Classify determines if input is a COMMAND or NL.
 func (b *OllamaBackend) Classify(ctx context.Context, input string) (string, error) {
-	return b.client.ClassifyInput(ctx, input)
+	// Temporarily hardcoded to NL since ClassifyInput was removed from ollama.Client.
+	// Actual classification should be done by categorizer/classifier packages.
+	return "NL", nil
 }
 
 // GenerateStream produces streaming text output.
