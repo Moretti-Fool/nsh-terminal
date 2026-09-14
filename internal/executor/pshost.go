@@ -29,6 +29,7 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 $inbox = $env:NSH_PS_INBOX
 
 function Write-NshDone([string]$Id, [int]$Code) {
+  [Console]::Out.WriteLine()
   [Console]::Out.WriteLine("NSH_DONE|$Id|$Code")
   [Console]::Out.Flush()
 }
@@ -38,15 +39,15 @@ function Write-NshDone([string]$Id, [int]$Code) {
 
 while ($true) {
   if (-not $inbox) { break }
-  if (-not (Test-Path -LiteralPath $inbox)) {
-    Start-Sleep -Milliseconds 15
+  if (-not [System.IO.File]::Exists($inbox)) {
+    Start-Sleep -Milliseconds 50
     continue
   }
   try {
-    $line = [IO.File]::ReadAllText($inbox)
-    [IO.File]::Delete($inbox)
+    $line = [System.IO.File]::ReadAllText($inbox)
+    [System.IO.File]::Delete($inbox)
   } catch {
-    Start-Sleep -Milliseconds 15
+    Start-Sleep -Milliseconds 20
     continue
   }
   $line = $line.Trim()
@@ -78,7 +79,7 @@ while ($true) {
 
   $global:LASTEXITCODE = 0
   try {
-    Invoke-Expression $command | Out-Default
+    Invoke-Expression $command 2>&1 | Out-Default
     $code = 0
     if (-not $?) { $code = 1 }
     if ($null -ne $global:LASTEXITCODE -and $global:LASTEXITCODE -ne 0) {
@@ -116,7 +117,6 @@ func (l *lockedBuffer) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	n, err := l.b.Write(p)
-	_, _ = os.Stderr.Write(p)
 	return n, err
 }
 
@@ -192,6 +192,7 @@ func startPSHost() (*psHost, error) {
 			err = io.EOF
 		}
 		h.lines <- lineResult{err: err}
+		close(h.lines)
 	}()
 
 	timer := time.NewTimer(psReadyTimeout)
@@ -247,17 +248,23 @@ func (h *psHost) run(command, cwd string) (RunResult, error) {
 		select {
 		case got, ok := <-h.lines:
 			if !ok {
+				_ = h.killUnlocked()
 				return RunResult{Output: outBuf.String() + h.errBuf.StringAndReset(), ExitCode: 1, DurationMs: time.Since(start).Milliseconds()}, fmt.Errorf("powershell host closed")
 			}
 			if got.err != nil {
+				_ = h.killUnlocked()
 				return RunResult{Output: outBuf.String() + h.errBuf.StringAndReset(), ExitCode: 1, DurationMs: time.Since(start).Milliseconds()}, got.err
 			}
-			if strings.HasPrefix(got.line, marker) {
-				codeStr := strings.TrimPrefix(got.line, marker)
+			if idx := strings.Index(got.line, marker); idx != -1 {
+				codeStr := strings.TrimSpace(got.line[idx+len(marker):])
 				code := 0
 				fmt.Sscanf(codeStr, "%d", &code)
 				stderr := h.errBuf.StringAndReset()
 				output := outBuf.String()
+				// Add whatever preceded the marker to output
+				if idx > 0 {
+					output += got.line[:idx] + "\n"
+				}
 				if stderr != "" {
 					output += stderr
 				}

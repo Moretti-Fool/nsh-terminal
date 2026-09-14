@@ -15,7 +15,12 @@ A cross-platform terminal that understands both shell commands and natural langu
 - **Workflow Recording & Replay** — Record a sequence of commands, save it with a name, and replay it anytime. Ctrl+C interrupts the current command without cancelling the recording.
 - **AI Search & Answers** — `ask what is kubernetes` gets an AI answer in the terminal. `google! <query>` gives both an AI answer and opens the browser.
 - **Cross-Platform** — Works on Windows, macOS, and Linux. On Windows, typed commands still use fast builtins/`cmd.exe`; natural language runs through a warm PowerShell host so cmdlets work without a 2–3s cold start per command.
-- **Structured History** — Browse command history by day, search across days, replay past commands.
+- **Structured History & Auto-Categorization Agent** — Background Auto-Categorization engine dynamically organizes command history by communicating with the local LLM async. Browse by day, search across domains, and replay past commands.
+- **RAG OS/Shell Filtering** — Implements a lightweight, local in-memory vector database for chunk embeddings and semantic search. When retrieving context for AI features, nsh intelligently filters this vector store based on the active OS and shell environment, ensuring highly relevant responses.
+- **Robust JSON Extraction** — Employs a resilient plan parsing logic that grabs the last valid JSON object in a response (often the final generation) and safely falls back to the first.
+- **Semantic Caching & Verification (LLM Router)** — Uses a lightning-fast sub-billion parameter model (set via `nsh model judge <name>`, e.g., `qwen2.5:0.5b`) to judge intents. It acts as an instant Semantic Cache to bypass generation, verifies commands before execution, and automatically triggers fallbacks for "empty" shell outputs.
+- **Double Ladder Fallback** — Set a fallback model via `nsh model fallback <name>` that nsh automatically switches to if the primary generation model fails or produces a completely blank output. The execution layer also utilizes a double ladder approach on Windows (warm host -> restart -> run once) for robustness.
+- **Automated Fine-Tuning Pipeline** — Import `.jsonl` datasets with `nsh learn-import` to fine-tune the system's local memory and improve performance on custom tasks.
 - **Destructive Command Safety** — Detects dangerous commands (`rm -rf`, `DROP TABLE`, etc.) and asks for confirmation.
 - **Graceful Degradation** — Works as a normal shell even when Ollama isn't running. NL features simply become unavailable.
 - **Customizable** — Choose your Ollama model, color theme, prompt style, scratch directory, and more via `config.toml`.
@@ -27,13 +32,13 @@ A cross-platform terminal that understands both shell commands and natural langu
 Requires [Go 1.21+](https://go.dev/dl/).
 
 ```bash
-go install github.com/nsh-terminal/nsh@latest
+go install github.com/Moretti-Fool/nsh-terminal@latest
 ```
 
 ### Build from Repository
 
 ```bash
-git clone https://github.com/nsh-terminal/nsh.git
+git clone https://github.com/Moretti-Fool/nsh-terminal.git
 cd nsh
 go build -ldflags="-s -w" -o nsh .
 ```
@@ -45,7 +50,7 @@ The binary will be ~7MB. Move it to a directory in your PATH:
 
 ### Binary Releases
 
-Download pre-built binaries from the [Releases](https://github.com/nsh-terminal/nsh/releases) page.
+Download pre-built binaries from the [Releases](https://github.com/Moretti-Fool/nsh-terminal/releases) page.
 
 ## Requirements
 
@@ -179,6 +184,9 @@ nsh down
 | `nsh models` | List available Ollama models |
 | `nsh model <name>` | Set generation model |
 | `nsh model classifier <name>` | Set classifier model |
+| `nsh model fallback <name>` | Set fallback generation model |
+| `nsh model judge <name>` | Set semantic judge model |
+| `nsh learn-import <file>` | Import `.jsonl` dataset to fine-tune local memory |
 | `nsh theme <name>` | Set color theme |
 | `nsh run <description>` | Generate and run a Python script |
 | `nsh scratch` | Show scratch directory location |
@@ -192,7 +200,9 @@ nsh down
 | `nsh up <name>` | Launch parallel services from a workflow |
 | `nsh down` | Stop all running services |
 | `nsh status` | Show running services |
-| `nsh history` | Show today's history |
+| `nsh history` | Show today's auto-categorized history |
+| `nsh categories` | List auto-categorized command domains |
+| `nsh categories <domain>` | Search commands within a domain |
 | `nsh history yesterday` | Yesterday's history |
 | `nsh history week` | Last 7 days |
 | `nsh replay HH:MM [--run]` | Inspect or re-execute a past command |
@@ -210,9 +220,12 @@ Config file location:
 ```toml
 [ollama]
 url = "http://localhost:11434"
-classifier_model = "phi3"
-generation_model = "llama3.2:3b"
-timeout_ms = 10000
+classifier_model = "nsh-local"
+generation_model = "nsh-local"
+fallback_model = "qwen2.5-coder:3b"
+judge_model = "qwen2.5:0.5b"
+timeout_ms = 45000
+max_retries = 3
 
 [shell]
 default = "auto"
@@ -302,7 +315,7 @@ nsh (single Go binary, ~7MB)
       builtins.go      - ls, cat, grep, find, cp, mv, rm, head, tail, etc.
       pshost.go        - Persistent PowerShell host for NL/cmdlets (Windows)
       services.go      - Parallel service launcher (nsh up/down/status)
-    history/           - JSONL per-day history with search
+    history/           - JSONL per-day history with search and background auto-categorization via LLM
     ollama/            - Ollama REST API client (command gen, Python gen, classify)
     repl/              - Main REPL loop
     scratch/           - Python scratch workspace (venv, deps, execution)

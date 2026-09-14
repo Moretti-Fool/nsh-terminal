@@ -8,43 +8,49 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/chzyer/readline"
-	"github.com/nsh-terminal/nsh/internal/classifier"
-	"github.com/nsh-terminal/nsh/internal/config"
-	"github.com/nsh-terminal/nsh/internal/executor"
-	"github.com/nsh-terminal/nsh/internal/ground"
-	"github.com/nsh-terminal/nsh/internal/history"
-	"github.com/nsh-terminal/nsh/internal/ollama"
-	"github.com/nsh-terminal/nsh/internal/scratch"
-	"github.com/nsh-terminal/nsh/internal/search"
-	"github.com/nsh-terminal/nsh/internal/workflow"
+	"github.com/Moretti-Fool/nsh-terminal/internal/categorizer"
+	"github.com/Moretti-Fool/nsh-terminal/internal/classifier"
+	"github.com/Moretti-Fool/nsh-terminal/internal/config"
+	"github.com/Moretti-Fool/nsh-terminal/internal/executor"
+	"github.com/Moretti-Fool/nsh-terminal/internal/ground"
+	"github.com/Moretti-Fool/nsh-terminal/internal/history"
+	"github.com/Moretti-Fool/nsh-terminal/internal/ollama"
+	"github.com/Moretti-Fool/nsh-terminal/internal/rag"
+	"github.com/Moretti-Fool/nsh-terminal/internal/scratch"
+	"github.com/Moretti-Fool/nsh-terminal/internal/search"
+	"github.com/Moretti-Fool/nsh-terminal/internal/workflow"
 )
 
 const Version = "1.1.0"
 
 type REPL struct {
-	cfg        config.Config
-	classifier *classifier.Classifier
-	executor   *executor.Executor
-	ollama     *ollama.Client
-	history    *history.History
-	workflows  *workflow.Manager
-	search     *search.Handler
-	scratch    *scratch.Runner
-	recording  atomic.Bool
-	recorded   []string
-	ollamaOK   bool
-	services   *executor.ServiceRunner
+	cfg         config.Config
+	classifier  *classifier.Classifier
+	executor    *executor.Executor
+	ollama      *ollama.Client
+	categorizer *categorizer.Categorizer
+	history     *history.History
+	workflows   *workflow.Manager
+	search      *search.Handler
+	scratch     *scratch.Runner
+	recording   atomic.Bool
+	recorded    []string
+	ollamaOK    bool
+	services    *executor.ServiceRunner
+	ragStore    *rag.Store
 }
 
 func New(cfg config.Config) *REPL {
 	configDir := config.Dir()
 	histDir := filepath.Join(configDir, "history")
 	wfDir := filepath.Join(configDir, "workflows")
+	ragDir := filepath.Join(configDir, "rag")
 
 	wfMgr := workflow.New(wfDir)
 	ollamaClient := ollama.New(
@@ -59,22 +65,29 @@ func New(cfg config.Config) *REPL {
 	ollamaClient.SetShellHint(exec.NLShellName())
 	ollamaClient.SetAvailableBins(exec.AvailableBins())
 	pathLookup := func(name string) bool {
-		return exec.PathExists(name)
+		return exec.PathExists(name) || exec.IsBuiltin(name) || strings.EqualFold(name, "cd")
 	}
 
 	hist := history.New(histDir, cfg.History.OutputPreviewChars)
 	hist.Rotate(cfg.History.RetentionDays)
 
+	cat := categorizer.New(ollamaClient)
+	
+	rStore, _ := rag.NewStore(ragDir)
+
 	r := &REPL{
-		cfg:        cfg,
-		classifier: classifier.New(pathLookup, wfMgr.Names()),
-		executor:   exec,
-		ollama:     ollamaClient,
-		history:    hist,
-		workflows:  wfMgr,
-		search:     search.New(cfg.Search.Engines, cfg.Search.DefaultEngine),
-		scratch:    scratch.NewRunner(cfg.Scratch.Dir, cfg.Scratch.Python),
-		ollamaOK:   ollamaClient.CheckHealth(),
+		cfg:         cfg,
+		classifier:  classifier.New(pathLookup, wfMgr.Names()),
+		executor:    exec,
+		ollama:      ollamaClient,
+		categorizer: cat,
+		history:     hist,
+		workflows:   wfMgr,
+		search:      search.New(cfg.Search.Engines, cfg.Search.DefaultEngine),
+		scratch:     scratch.NewRunner(cfg.Scratch.Dir, cfg.Scratch.Python),
+		ollamaOK:    ollamaClient.CheckHealth(),
+		services:    executor.NewServiceRunner(),
+		ragStore:    rStore,
 	}
 	r.autoDetectModel()
 	return r
@@ -92,13 +105,17 @@ func (r *REPL) Run() error {
 }
 
 func (r *REPL) runReadline() error {
-	rl, err := readline.NewEx(&readline.Config{
+	cfg := &readline.Config{
 		Prompt:          r.promptString(),
 		HistoryFile:     filepath.Join(config.Dir(), "input.hist"),
 		AutoComplete:    nshCompleter{},
 		InterruptPrompt: "^C",
 		EOFPrompt:       "exit",
-	})
+	}
+	if cr := newConsoleReader(); cr != nil {
+		cfg.Stdin = cr
+	}
+	rl, err := readline.NewEx(cfg)
 	if err != nil {
 		return r.runScanner()
 	}
@@ -236,6 +253,11 @@ func (r *REPL) printWelcome() {
 	fmt.Println()
 }
 
+// HandleInputForCLI is exported for non-interactive executions (e.g. -c flag).
+func (r *REPL) HandleInputForCLI(input string) {
+	r.handleInput(input)
+}
+
 func (r *REPL) handleInput(input string) {
 	if input == "--help" || input == "-h" || input == "help" {
 		r.printHelp()
@@ -309,9 +331,71 @@ func (r *REPL) handleCommand(input string) {
 	r.saveHistory(input, "command", "", result.ExitCode, preview, result.DurationMs)
 }
 
+func (r *REPL) semanticCacheMatch(ctx context.Context, query string, pastEntries []history.Entry) string {
+	q := strings.ToLower(strings.TrimSpace(query))
+	// 1. Exact match (instant return, zero compute)
+	for _, e := range pastEntries {
+		if strings.ToLower(strings.TrimSpace(e.Input)) == q {
+			return e.Generated
+		}
+	}
+	
+	// 2. LLM Semantic Judge
+	// Check up to 5 unique recent queries
+	judgeModel := r.cfg.Ollama.JudgeModel
+	if judgeModel == "" {
+		judgeModel = "qwen2.5:0.5b"
+	}
+	
+	checked := 0
+	seen := make(map[string]bool)
+	for _, e := range pastEntries {
+		cleanInput := strings.ToLower(strings.TrimSpace(e.Input))
+		if seen[cleanInput] {
+			continue
+		}
+		seen[cleanInput] = true
+
+		if checked >= 5 {
+			break
+		}
+		checked++
+		
+		prompt := fmt.Sprintf("Are these two requests asking for the exact same shell action? Request 1: `%s`. Request 2: `%s`. Reply ONLY 'YES' or 'NO'.", query, e.Input)
+		yes, err := r.ollama.AskJudge(ctx, judgeModel, prompt)
+		if err == nil && yes {
+			return e.Generated
+		}
+	}
+	
+	return ""
+}
+
 func (r *REPL) handleNL(input string) {
 	if scratch.LooksLikePython(input) && r.scratch.Available() {
 		r.handleScratchRun(input)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(r.cfg.Ollama.TimeoutMs)*time.Millisecond)
+	defer cancel()
+
+	judgeModel := r.cfg.Ollama.JudgeModel
+	if judgeModel == "" {
+		judgeModel = "qwen2.5:0.5b"
+	}
+
+	// 1. Check local cache layer for exact or very similar past commands
+	cachedCmd := r.semanticCacheMatch(ctx, input, r.history.SuccessfulNL(200))
+	if cachedCmd != "" {
+		fmt.Printf("\n[nsh] (from memory) \033[36m> %s\033[0m\n", cachedCmd)
+		if r.confirmIfDestructive(cachedCmd) {
+			ok, result := r.runGeneratedCommands(cachedCmd)
+			if ok {
+				r.recordGenerated(cachedCmd)
+				r.saveHistory(input, "nl", cachedCmd, result.ExitCode, result.Output, result.DurationMs)
+			}
+		}
 		return
 	}
 
@@ -324,91 +408,213 @@ func (r *REPL) handleNL(input string) {
 		return
 	}
 
+
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		cwd = "."
 	}
-	ctx := context.Background()
 	snap := ground.Capture(cwd, r.executor.PathExists)
 	shell := r.executor.NLShellName()
 
-	fmt.Print("[nsh] thinking...")
-	plan, msgs, err := r.ollama.Translate(ctx, ollama.TranslateRequest{
-		Input:    input,
-		Env:      ollama.Env{CWD: snap.CWD, Shell: shell, Listing: snap.Listing, Present: snap.Present},
-		Examples: r.nlFewShots(),
-		RunTool: func(name string, args map[string]any) string {
-			return ground.ExecTool(name, args, cwd, r.executor.PathExists)
-		},
-	})
-	fmt.Print("\r                \r")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[nsh] Ollama error: %v\n", err)
-		return
+	var plan ollama.Plan
+	var generated string
+	var msgs []ollama.ChatMessage
+
+	fewShots := r.nlFewShots(ctx, input)
+
+	// Restore back to default generation model when handleNL completes
+	defer r.ollama.SetGenerationModel(r.cfg.Ollama.GenerationModel)
+
+	tryModel := func(modelName string, isFallback bool) bool {
+		if isFallback {
+			fmt.Printf("[nsh] Primary model failed, falling back to %s...\n", modelName)
+			r.ollama.SetGenerationModel(modelName)
+		} else {
+			fmt.Print("[nsh] thinking...")
+		}
+
+		p, m, err := r.ollama.Translate(ctx, ollama.TranslateRequest{
+			Input:    input,
+			Env:      ollama.Env{CWD: snap.CWD, Shell: shell, Listing: snap.Listing, Present: snap.Present},
+			Examples: fewShots,
+			RunTool: func(name string, args map[string]any) string {
+				if name == "run_command" {
+					cmdStr := fmt.Sprint(args["command"])
+					if cmdStr == "" {
+						return "missing argument: command"
+					}
+					display := cmdStr
+					if len(display) > 80 {
+						display = display[:80] + "..."
+					}
+					fmt.Printf("\r                \r\033[90m  $ %s\033[0m\n", display)
+					fmt.Print("[nsh] thinking...")
+					result, err := r.executor.RunInvestigate(cmdStr)
+					if err != nil {
+						return "error: " + err.Error()
+					}
+					out := result.Output
+					if result.ExitCode != 0 {
+						out = fmt.Sprintf("EXIT CODE %d\n%s", result.ExitCode, out)
+					}
+					return out
+				}
+				return ground.ExecTool(name, args, cwd, r.executor.PathExists)
+			},
+		})
+		if !isFallback {
+			fmt.Print("\r                \r")
+		}
+
+		if err != nil {
+			return false
+		}
+
+		if vErr := ollama.ValidatePlan(p, shell); vErr != nil {
+			fmt.Print("[nsh] retrying...")
+			repaired, newMsgs, rerr := r.ollama.Repair(ctx, m, vErr.Error())
+			fmt.Print("\r                 \r")
+			if rerr != nil || ollama.ValidatePlan(repaired, shell) != nil {
+				return false
+			}
+			p = repaired
+			m = newMsgs
+		}
+
+		gen := p.Join()
+		if gen == "" {
+			return false
+		}
+		
+		plan = p
+		generated = gen
+		msgs = m
+		return true
 	}
 
-	if vErr := ollama.ValidatePlan(plan, shell); vErr != nil {
-		fmt.Print("[nsh] retrying...")
-		repaired, newMsgs, rerr := r.ollama.Repair(ctx, msgs, vErr.Error())
-		fmt.Print("\r                 \r")
-		if rerr != nil || ollama.ValidatePlan(repaired, shell) != nil {
-			fmt.Println("[nsh] Could not translate that request into a command.")
+
+
+	executeAndCheck := func() (bool, executor.RunResult, string) {
+		if plan.Explanation != "" {
+			fmt.Printf("[nsh] %s\n", plan.Explanation)
+		}
+		if r.cfg.UI.ShowGeneratedCommand {
+			fmt.Printf("\033[36m> %s\033[0m\n", generated)
+		}
+		if !r.confirmIfDestructive(generated) {
+			return true, executor.RunResult{}, ""
+		}
+
+		ok, result := r.runGeneratedCommands(generated)
+		
+		if ok && strings.TrimSpace(result.Output) == "" {
+			emptyPrompt := fmt.Sprintf("The user requested: `%s`. The command `%s` executed successfully but returned absolutely no output. Given the user's request, is a completely blank output the correct and expected behavior? Reply ONLY 'YES' or 'NO'.", input, generated)
+			yes, err := r.ollama.AskJudge(ctx, judgeModel, emptyPrompt)
+			if err == nil && !yes {
+				fmt.Println("[nsh] Command returned no output, attempting alternative...")
+				return false, result, "The command ran successfully but produced completely blank output, which is incorrect."
+			}
+		}
+		
+		return ok, result, ""
+	}
+
+	success := tryModel(r.cfg.Ollama.GenerationModel, false)
+	var handled bool
+	var result executor.RunResult
+	var rejectReason string
+
+	if success {
+		handled, result, rejectReason = executeAndCheck()
+		if handled {
+			r.recordGenerated(generated)
+			r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
 			return
 		}
-		plan = repaired
+	}
+
+	if (!success || (!handled && rejectReason != "")) && r.cfg.Ollama.FallbackModel != "" && r.cfg.Ollama.FallbackModel != r.cfg.Ollama.GenerationModel {
+		success = tryModel(r.cfg.Ollama.FallbackModel, true)
+		if success {
+			handled, result, rejectReason = executeAndCheck()
+			if handled {
+				r.recordGenerated(generated)
+				r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
+				return
+			}
+		}
+	}
+
+	if !success {
+		fmt.Println("[nsh] Could not translate that request into a command.")
+		return
+	}
+
+	// Agentic repair loop
+	maxRetries := r.cfg.Ollama.MaxRetries
+	if maxRetries <= 0 {
+		maxRetries = 1
+	}
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		reason := rejectReason
+		if reason == "" {
+			reason = result.Output
+			if reason == "" {
+				reason = fmt.Sprintf("exit code %d", result.ExitCode)
+			}
+		}
+		
+		fmt.Printf("[nsh] retrying (%d/%d)...", attempt+1, maxRetries)
+		repaired, newMsgs, rerr := r.ollama.Repair(ctx, msgs, reason)
+		fmt.Print("\r                         \r")
+		if rerr != nil || repaired.Join() == "" || repaired.Join() == generated || ollama.ValidatePlan(repaired, shell) != nil {
+			continue
+		}
+		generated = repaired.Join()
 		msgs = newMsgs
+		
+		handled, result, rejectReason = executeAndCheck()
+		if handled {
+			break
+		}
 	}
-
-	generated := plan.Join()
-	if generated == "" {
-		fmt.Println("[nsh] No command generated.")
-		return
-	}
-
-	if r.cfg.UI.ShowGeneratedCommand {
-		fmt.Printf("\033[36m> %s\033[0m\n", generated)
-	}
-	if !r.confirmIfDestructive(generated) {
-		return
-	}
-
-	ok, result := r.runGeneratedCommands(generated)
-	if ok {
-		r.recordGenerated(generated)
-		r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
-		return
-	}
-
-	reason := result.Output
-	if reason == "" {
-		reason = fmt.Sprintf("exit code %d", result.ExitCode)
-	}
-	fmt.Print("[nsh] retrying...")
-	repaired, _, rerr := r.ollama.Repair(ctx, msgs, reason)
-	fmt.Print("\r                 \r")
-	if rerr != nil || repaired.Join() == "" || repaired.Join() == generated || ollama.ValidatePlan(repaired, shell) != nil {
-		r.recordGenerated(generated)
-		r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
-		return
-	}
-	generated = repaired.Join()
-	if r.cfg.UI.ShowGeneratedCommand {
-		fmt.Printf("\033[36m> %s\033[0m\n", generated)
-	}
-	if !r.confirmIfDestructive(generated) {
-		return
-	}
-	_, result = r.runGeneratedCommands(generated)
 	r.recordGenerated(generated)
 	r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
 }
 
-func (r *REPL) nlFewShots() []ollama.FewShot {
-	entries := r.history.SuccessfulNL(3)
-	out := make([]ollama.FewShot, 0, len(entries))
-	for _, e := range entries {
-		out = append(out, ollama.FewShot{Input: e.Input, Command: e.Generated})
+func (r *REPL) nlFewShots(ctx context.Context, input string) []ollama.FewShot {
+	var out []ollama.FewShot
+
+	// If RAG is available, embed and search
+	if r.ragStore != nil {
+		emb, err := r.ollama.GenerateEmbeddings(ctx, "nomic-embed-text", []string{input})
+		if err == nil && len(emb) > 0 {
+			filters := map[string]string{
+				"type": "few-shot",
+				"os": runtime.GOOS,
+				"shell": r.ollama.ShellName(),
+			}
+			results := r.ragStore.Search(emb[0], 3, filters)
+			for _, res := range results {
+				if cmd, ok := res.Chunk.Metadata["command"]; ok {
+					out = append(out, ollama.FewShot{Input: res.Chunk.Text, Command: cmd})
+				}
+			}
+			if len(out) > 0 {
+				fmt.Printf("[nsh] Retrieved %d context examples from RAG memory...\n", len(out))
+			}
+		}
 	}
+
+	// Fallback to recent history if no RAG results
+	if len(out) == 0 {
+		entries := r.history.SuccessfulNL(3)
+		for _, e := range entries {
+			out = append(out, ollama.FewShot{Input: e.Input, Command: e.Generated})
+		}
+	}
+
 	return out
 }
 
@@ -649,12 +855,20 @@ func (r *REPL) handleBuiltin(input string) {
 		r.handleSaveLast(args)
 	case "workflows":
 		r.handleListWorkflows()
+	case "categories":
+		r.handleCategories(args)
 	case "edit":
 		r.handleEditWorkflow(args)
 	case "delete":
 		r.handleDeleteWorkflow(args)
 	case "history":
 		r.handleHistory(args)
+	case "doc":
+		r.handleDoc(args)
+	case "learn":
+		r.handleLearn(args)
+	case "learn-import":
+		r.handleLearnImport(args)
 	case "replay":
 		r.handleReplay(args)
 	case "config":
@@ -700,49 +914,7 @@ func (r *REPL) handleAmbiguous(input string) {
 		r.handleCommand(input)
 		return
 	}
-
-	ctx := context.Background()
-	classification, err := r.ollama.ClassifyInput(ctx, input)
-	if err != nil {
-		r.handleCommand(input)
-		return
-	}
-
-	if classification == "COMMAND" {
-		fields := strings.Fields(input)
-		first := ""
-		if len(fields) > 0 {
-			first = strings.ToLower(fields[0])
-		}
-		hasFlag := false
-		for _, f := range fields {
-			if strings.HasPrefix(f, "-") {
-				hasFlag = true
-				break
-			}
-		}
-		if hasFlag || (first != "" && r.executor.PathExists(first)) {
-			r.handleCommand(input)
-			return
-		}
-		r.handleNL(input)
-		return
-	}
-
-	wfNames := r.workflows.Names()
-	if len(wfNames) > 0 {
-		match, err := r.ollama.MatchWorkflow(ctx, input, wfNames)
-		if err == nil && match != "" {
-			fmt.Printf("[nsh] Did you mean workflow %q? [Y/n] ", match)
-			var confirm string
-			fmt.Scanln(&confirm)
-			confirm = strings.ToLower(strings.TrimSpace(confirm))
-			if confirm == "" || confirm == "y" || confirm == "yes" {
-				r.handleWorkflow(match)
-				return
-			}
-		}
-	}
+	// Pure NL fallback without bloated LLM intent classifiers
 	r.handleNL(input)
 }
 
@@ -839,6 +1011,38 @@ func (r *REPL) handleListWorkflows() {
 			desc = fmt.Sprintf("%d steps", len(wf.Steps))
 		}
 		fmt.Printf("  %-20s %s\n", wf.Name, desc)
+	}
+}
+
+func (r *REPL) handleCategories(args []string) {
+	if r.categorizer == nil {
+		fmt.Println("[nsh] Auto-Categorizer is not initialized.")
+		return
+	}
+	if len(args) == 0 {
+		domains := r.categorizer.GetDomainList()
+		if len(domains) == 0 {
+			fmt.Println("No command categories found yet. Run some commands to let the AI categorize them!")
+			return
+		}
+		fmt.Println("\nDiscovered Categories:")
+		for _, d := range domains {
+			cmds, _ := r.categorizer.GetCommandsInDomain(d)
+			fmt.Printf("  - %s (%d commands)\n", d, len(cmds))
+		}
+		fmt.Println("\nTo search a domain: nsh categories \"<name>\"")
+		return
+	}
+
+	domain := strings.Join(args, " ")
+	cmds, actualDomain := r.categorizer.GetCommandsInDomain(domain)
+	if len(cmds) == 0 {
+		fmt.Printf("No commands found in category %q.\n", domain)
+		return
+	}
+	fmt.Printf("\nCommands in [%s]:\n", actualDomain)
+	for _, c := range cmds {
+		fmt.Printf("  %s\n", c)
 	}
 }
 
@@ -1085,6 +1289,12 @@ func (r *REPL) handleHistory(args []string) {
 		return
 	}
 	switch args[0] {
+	case "clear":
+		if err := r.history.Clear(); err != nil {
+			fmt.Fprintf(os.Stderr, "[nsh] Failed to clear history: %v\n", err)
+		} else {
+			fmt.Println("[nsh] History cleared. Memory reset.")
+		}
 	case "yesterday":
 		r.printDayHistory(now.AddDate(0, 0, -1), "Yesterday")
 	case "week":
@@ -1195,8 +1405,10 @@ func (r *REPL) handleListModels() {
 	fmt.Println()
 	fmt.Printf("  Current generation model:  %s\n", r.ollama.GenerationModel())
 	fmt.Printf("  Current classifier model:  %s\n", r.ollama.ClassifierModel())
+	fmt.Printf("  Current fallback model:    %s\n", r.cfg.Ollama.FallbackModel)
+	fmt.Printf("  Current judge model:       %s\n", r.cfg.Ollama.JudgeModel)
 	fmt.Println()
-	fmt.Println("  Switch with: nsh model <name>")
+	fmt.Println("  Switch with: nsh model [classifier|fallback|judge] <name>")
 }
 
 func (r *REPL) handleSetModel(args []string) {
@@ -1204,8 +1416,12 @@ func (r *REPL) handleSetModel(args []string) {
 		fmt.Println("[nsh] Usage:")
 		fmt.Println("  nsh model <name>              Set generation model")
 		fmt.Println("  nsh model classifier <name>   Set classifier model")
+		fmt.Println("  nsh model fallback <name>     Set fallback model")
+		fmt.Println("  nsh model judge <name>        Set judge model")
 		fmt.Printf("\n  Current generation:  %s\n", r.ollama.GenerationModel())
 		fmt.Printf("  Current classifier:  %s\n", r.ollama.ClassifierModel())
+		fmt.Printf("  Current fallback:    %s\n", r.cfg.Ollama.FallbackModel)
+		fmt.Printf("  Current judge:       %s\n", r.cfg.Ollama.JudgeModel)
 		return
 	}
 	if args[0] == "classifier" {
@@ -1216,13 +1432,33 @@ func (r *REPL) handleSetModel(args []string) {
 		r.ollama.SetClassifierModel(args[1])
 		r.cfg.Ollama.ClassifierModel = args[1]
 		config.Save(r.cfg, filepath.Join(config.Dir(), "config.toml"))
-		fmt.Printf("[nsh] Classifier model set to: %s\n", args[1])
+		fmt.Printf("[nsh] Classifier model set to %s\n", args[1])
+		return
+	}
+	if args[0] == "fallback" {
+		if len(args) < 2 {
+			fmt.Println("[nsh] Usage: nsh model fallback <name>")
+			return
+		}
+		r.cfg.Ollama.FallbackModel = args[1]
+		config.Save(r.cfg, filepath.Join(config.Dir(), "config.toml"))
+		fmt.Printf("[nsh] Fallback model set to %s\n", args[1])
+		return
+	}
+	if args[0] == "judge" {
+		if len(args) < 2 {
+			fmt.Println("[nsh] Usage: nsh model judge <name>")
+			return
+		}
+		r.cfg.Ollama.JudgeModel = args[1]
+		config.Save(r.cfg, filepath.Join(config.Dir(), "config.toml"))
+		fmt.Printf("[nsh] Judge model set to %s\n", args[1])
 		return
 	}
 	r.ollama.SetGenerationModel(args[0])
 	r.cfg.Ollama.GenerationModel = args[0]
 	config.Save(r.cfg, filepath.Join(config.Dir(), "config.toml"))
-	fmt.Printf("[nsh] Generation model set to: %s\n", args[0])
+	fmt.Printf("[nsh] Generation model set to %s\n", args[0])
 }
 
 func (r *REPL) handleTheme(args []string) {
@@ -1258,6 +1494,11 @@ func (r *REPL) autoDetectModel() {
 	if picked == "" || picked == genModel {
 		return
 	}
+	if strings.TrimSuffix(picked, ":latest") == strings.TrimSuffix(genModel, ":latest") {
+		r.ollama.SetGenerationModel(picked)
+		r.ollama.SetClassifierModel(picked)
+		return
+	}
 	r.ollama.SetGenerationModel(picked)
 	r.ollama.SetClassifierModel(picked)
 	fmt.Printf("[nsh] Model %q not found. Using %q instead.\n", genModel, picked)
@@ -1267,6 +1508,10 @@ func (r *REPL) autoDetectModel() {
 func (r *REPL) printHelp() {
 	fmt.Printf(`nsh v%s — the natural shell
 Developed by Sanchit
+
+GitHub Repo: https://github.com/Moretti-Fool/nsh-terminal
+Supports: nsh custom lora adapter
+Feel free to contribute!
 
 Usage:
   Type commands normally, or use plain English.
@@ -1292,6 +1537,8 @@ Built-in commands:
   nsh models                     List available Ollama models
   nsh model <name>               Set generation model
   nsh model classifier <name>    Set classifier model
+  nsh model fallback <name>      Set fallback model
+  nsh model judge <name>         Set semantic judge model
   nsh theme <name>               Set color theme
   nsh record start               Start recording a workflow
   nsh record stop "name"         Stop recording and save as workflow
@@ -1306,8 +1553,11 @@ Built-in commands:
   nsh history yesterday          Show yesterday's history
   nsh history week               Show last 7 days
   nsh history YYYY-MM-DD         Show specific date
+  nsh categories                 List auto-categorized command domains
+  nsh categories <domain>        Search commands within a domain
   nsh replay HH:MM               Show details of a command at that time
   nsh replay HH:MM --run         Re-execute that command
+  nsh learn-import <file>        Import dataset to fine-tune local memory
   nsh config                     Open config in your editor
   exit / quit                    Exit nsh
 `, Version)
@@ -1328,6 +1578,11 @@ func (r *REPL) saveHistory(input, inputType, generated string, exitCode int, out
 		CWD:           cwd,
 		DurationMs:    durationMs,
 	})
+
+	// Dispatch background categorization
+	if r.categorizer != nil {
+		r.categorizer.CategorizeAsync(input, generated, output)
+	}
 }
 
 func pickEditor() string {

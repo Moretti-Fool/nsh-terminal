@@ -1,13 +1,11 @@
 package ground
 
 import (
-	"bytes"
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
-	"time"
 )
 
 const maxListing = 40
@@ -66,44 +64,34 @@ func ListCWD(cwd string, limit int) string {
 	return strings.TrimSpace(b.String())
 }
 
-// ExecTool runs one translator tool. Unknown names return an error string, not a panic.
 func ExecTool(name string, args map[string]any, cwd string, pathExists func(string) bool) string {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "list_cwd":
-		return ListCWD(cwd, maxListing)
-	case "which":
-		prog := argString(args, "name")
-		if prog == "" {
-			return "missing argument: name"
+	cmdStr := ""
+	if name == "run_command" {
+		cmdStr = argString(args, "command")
+	} else {
+		// The 1.5B model often hallucinates the shell command directly into the 'name' field
+		cmdStr = name
+		if cmdArg := argString(args, "command"); cmdArg != "" && cmdArg != name {
+			cmdStr = cmdStr + " " + cmdArg
 		}
-		if pathExists != nil && pathExists(prog) {
-			if p, err := exec.LookPath(prog); err == nil {
-				return p
-			}
-			return prog + " is on PATH"
-		}
-		return prog + " is not on PATH"
-	case "git_status":
-		if pathExists != nil && !pathExists("git") {
-			return "git is not on PATH"
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "git", "-C", cwd, "status", "--short", "-b")
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		cmd.Stderr = &out
-		if err := cmd.Run(); err != nil {
-			return strings.TrimSpace(out.String() + "\n" + err.Error())
-		}
-		s := strings.TrimSpace(out.String())
-		if s == "" {
-			return "(clean working tree)"
-		}
-		return trimRunes(s, 1500)
-	default:
-		return "unknown tool: " + name
 	}
+	
+	if cmdStr == "" {
+		return "error: missing command argument"
+	}
+	
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", cmdStr)
+	} else {
+		cmd = exec.Command("bash", "-c", cmdStr)
+	}
+	cmd.Dir = cwd
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "error: " + err.Error() + "\noutput: " + string(out)
+	}
+	return string(out)
 }
 
 func argString(args map[string]any, key string) string {

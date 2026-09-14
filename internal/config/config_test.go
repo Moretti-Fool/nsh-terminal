@@ -12,7 +12,7 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Ollama.URL != "http://localhost:11434" {
 		t.Errorf("got %s", cfg.Ollama.URL)
 	}
-	if cfg.Ollama.ClassifierModel != "qwen2.5-coder:7b" {
+	if cfg.Ollama.ClassifierModel != "nsh-local" {
 		t.Errorf("got %s", cfg.Ollama.ClassifierModel)
 	}
 	if cfg.Ollama.TimeoutMs != 45000 {

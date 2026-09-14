@@ -26,7 +26,10 @@ type OllamaConfig struct {
 	URL             string `toml:"url"`
 	ClassifierModel string `toml:"classifier_model"`
 	GenerationModel string `toml:"generation_model"`
+	FallbackModel   string `toml:"fallback_model"`
+	JudgeModel      string `toml:"judge_model"`
 	TimeoutMs       int    `toml:"timeout_ms"`
+	MaxRetries      int    `toml:"max_retries"`
 }
 
 type ShellConfig struct {
@@ -59,9 +62,12 @@ func Default() Config {
 	return Config{
 		Ollama: OllamaConfig{
 			URL:             "http://localhost:11434",
-			ClassifierModel: "qwen2.5-coder:7b",
-			GenerationModel: "qwen2.5-coder:7b",
+			ClassifierModel: "nsh-local",
+			GenerationModel: "nsh-local",
+			FallbackModel:   "qwen2.5-coder:3b",
+			JudgeModel:      "qwen2.5:0.5b",
 			TimeoutMs:       45000,
+			MaxRetries:      3,
 		},
 		Shell: ShellConfig{
 			Default:   "auto",

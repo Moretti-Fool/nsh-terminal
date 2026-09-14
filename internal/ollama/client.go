@@ -149,68 +149,6 @@ func trimForPrompt(s string, n int) string {
 	return s[:n] + "..."
 }
 
-func (c *Client) ClassifyInput(ctx context.Context, input string) (string, error) {
-	resp, err := c.doGenerate(ctx, generateRequest{
-		Model:  c.classifierModel,
-		Prompt: input,
-		System: `Classify the following input as one of: COMMAND, NL
-COMMAND = the user is invoking a program or builtin (first word is the executable), e.g. git status, ls -la, docker ps
-NL = English describing a goal or asking a question, even if it does not use words like "please" or "show me"
-If the first word is not a real command, classify as NL.
-Respond with JSON {"label":"COMMAND"} or {"label":"NL"}.`,
-		Stream:    false,
-		Format:    classifyFormat,
-		Options:   genOptions(),
-		KeepAlive: "10m",
-	})
-	if err != nil {
-		return "", err
-	}
-	raw := strings.TrimSpace(resp.Response)
-	var dto struct {
-		Label string `json:"label"`
-	}
-	if json.Unmarshal([]byte(extractJSONObject(raw)), &dto) == nil {
-		result := strings.ToUpper(strings.TrimSpace(dto.Label))
-		if result == "COMMAND" || result == "NL" {
-			return result, nil
-		}
-	}
-	result := strings.TrimSpace(strings.ToUpper(raw))
-	if strings.Contains(result, "COMMAND") && !strings.Contains(result, "NL") {
-		return "COMMAND", nil
-	}
-	if result != "COMMAND" && result != "NL" {
-		return "NL", nil
-	}
-	return result, nil
-}
-
-func (c *Client) MatchWorkflow(ctx context.Context, input string, workflows []string) (string, error) {
-	resp, err := c.doGenerate(ctx, generateRequest{
-		Model:  c.classifierModel,
-		Prompt: input,
-		System: fmt.Sprintf(`You are matching user input to a saved workflow name.
-Available workflows: %s
-If the user's input matches one of these workflows, respond with EXACTLY the workflow name.
-If none match, respond with NONE.
-Respond with just the name or NONE. Nothing else.`, strings.Join(workflows, ", ")),
-		Stream:    false,
-		Options:   genOptions(),
-		KeepAlive: "10m",
-	})
-	if err != nil {
-		return "", err
-	}
-	result := strings.TrimSpace(resp.Response)
-	for _, wf := range workflows {
-		if strings.EqualFold(result, wf) {
-			return wf, nil
-		}
-	}
-	return "", nil
-}
-
 func (c *Client) GeneratePython(ctx context.Context, input string, cwd string) (string, error) {
 	system := fmt.Sprintf(`You are nsh, a Python script generator.
 Generate a complete, runnable Python script for the user's request.
@@ -363,6 +301,49 @@ func (c *Client) CheckHealth() bool {
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
+}
+
+func (c *Client) DoGenerateRaw(ctx context.Context, prompt string, format json.RawMessage) (string, error) {
+	resp, err := c.doGenerate(ctx, generateRequest{
+		Model:     c.classifierModel,
+		Prompt:    prompt,
+		Format:    format,
+		Stream:    false,
+		Options:   genOptions(),
+		KeepAlive: "10m",
+	})
+	if err != nil {
+		return "", err
+	}
+	return resp.Response, nil
+}
+
+func (c *Client) AskJudge(ctx context.Context, judgeModel string, prompt string) (bool, error) {
+	req := generateRequest{
+		Model:   judgeModel,
+		Prompt:  prompt,
+		Stream:  false,
+		Options: map[string]any{"temperature": 0.0, "num_predict": 10},
+	}
+	resp, err := c.doGenerate(ctx, req)
+	if err != nil {
+		return false, err
+	}
+	res := strings.ToUpper(resp.Response)
+	return strings.Contains(res, "YES"), nil
+}
+
+func (c *Client) Ask(ctx context.Context, prompt string) (string, error) {
+	req := generateRequest{
+		Model:  c.generationModel,
+		Prompt: prompt,
+		Stream: false,
+	}
+	resp, err := c.doGenerate(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(resp.Response), nil
 }
 
 func (c *Client) doGenerate(ctx context.Context, req generateRequest) (*generateResponse, error) {

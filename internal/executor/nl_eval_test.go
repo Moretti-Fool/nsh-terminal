@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nsh-terminal/nsh/internal/config"
-	"github.com/nsh-terminal/nsh/internal/ground"
-	"github.com/nsh-terminal/nsh/internal/ollama"
+	"github.com/Moretti-Fool/nsh-terminal/internal/config"
+	"github.com/Moretti-Fool/nsh-terminal/internal/ground"
+	"github.com/Moretti-Fool/nsh-terminal/internal/ollama"
 )
 
 type nlCase struct {

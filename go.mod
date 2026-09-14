@@ -1,4 +1,4 @@
-module github.com/nsh-terminal/nsh
+module github.com/Moretti-Fool/nsh-terminal
 
 go 1.26.4
 

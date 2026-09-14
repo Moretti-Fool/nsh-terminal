@@ -20,26 +20,8 @@ func TestListCWD(t *testing.T) {
 	}
 }
 
-func TestExecToolWhich(t *testing.T) {
-	exists := func(name string) bool { return name == "git" }
-	if got := ExecTool("which", map[string]any{"name": "git"}, ".", exists); !strings.Contains(got, "git") {
+func TestExecTool(t *testing.T) {
+	if got := ExecTool("nope", nil, ".", nil); !strings.Contains(got, "unknown tool") {
 		t.Fatalf("got %q", got)
-	}
-	if got := ExecTool("which", map[string]any{"name": "nope"}, ".", exists); !strings.Contains(got, "not on PATH") {
-		t.Fatalf("got %q", got)
-	}
-	if got := ExecTool("nope", nil, ".", exists); !strings.Contains(got, "unknown tool") {
-		t.Fatalf("got %q", got)
-	}
-}
-
-func TestCapturePresent(t *testing.T) {
-	dir := t.TempDir()
-	s := Capture(dir, func(name string) bool { return name == "git" })
-	if s.CWD != dir {
-		t.Fatalf("cwd %s", s.CWD)
-	}
-	if len(s.Present) != 1 || s.Present[0] != "git" {
-		t.Fatalf("present %+v", s.Present)
 	}
 }

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/nsh-terminal/nsh/internal/config"
-	"github.com/nsh-terminal/nsh/internal/repl"
+	"github.com/Moretti-Fool/nsh-terminal/internal/config"
+	"github.com/Moretti-Fool/nsh-terminal/internal/repl"
 )
 
 func main() {
@@ -16,6 +16,13 @@ func main() {
 			return
 		case "--version", "-v":
 			fmt.Printf("nsh %s\n", repl.Version)
+			return
+		case "-c":
+			if len(os.Args) > 2 {
+				cfg, _ := config.EnsureDefaults()
+				r := repl.New(cfg)
+				r.HandleInputForCLI(os.Args[2])
+			}
 			return
 		}
 	}
@@ -59,13 +66,20 @@ Getting started:
 Interactive commands:
   nsh help                  show full command reference
   nsh models                list / switch Ollama models
+  nsh model <name>          set generation model
+  nsh model classifier <name> set classifier model
+  nsh model fallback <name> set fallback model
+  nsh model judge <name>    set semantic judge model
+  nsh learn-import <file>   import jsonl dataset for fine-tuning
   nsh run <description>     generate and run a Python script
   nsh up <workflow>          launch parallel services
   nsh down                  stop all services
   nsh record start          start recording a workflow
   nsh record stop "name"    save recorded workflow
   nsh workflows             list saved workflows
-  nsh history               browse command history
+  nsh history               browse auto-categorized command history
+  nsh categories            list auto-categorized command domains
+  nsh categories <domain>   search commands within a domain
   nsh theme <name>          switch color theme (default, blue, cyan, ...)
   nsh config                open config file in editor
   exit                      quit nsh
@@ -78,7 +92,11 @@ Requirements:
   Ollama (optional) — install from https://ollama.ai for NL features.
   Without Ollama, nsh works as a regular shell with smart routing.
 
+GitHub Repo: https://github.com/Moretti-Fool/nsh-terminal
+Supports: nsh custom lora adapter
+Feel free to contribute!
+
 Developed by Sanchit
-Report bugs at: https://github.com/nsh-terminal/nsh/issues
+Report bugs at: https://github.com/Moretti-Fool/nsh-terminal/issues
 `, repl.Version)
 }

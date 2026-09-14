@@ -96,36 +96,19 @@ type chatResponse struct {
 }
 
 func translatorTools() []chatTool {
-	emptyObj := map[string]any{"type": "object", "properties": map[string]any{}}
 	return []chatTool{
 		{
 			Type: "function",
 			Function: chatToolSchema{
-				Name:        "list_cwd",
-				Description: "List files and directories in the current working directory with sizes. Use when the request depends on what is actually in this folder.",
-				Parameters:  emptyObj,
-			},
-		},
-		{
-			Type: "function",
-			Function: chatToolSchema{
-				Name:        "which",
-				Description: "Check whether a program name exists on PATH.",
+				Name:        "run_command",
+				Description: "Execute a shell command on this machine and return its output. Use this to investigate system state (check ports, list processes, inspect files, test commands) before generating the final command plan. Do not use for destructive operations — those belong in the final plan.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"name": map[string]any{"type": "string", "description": "Executable name, e.g. git or rg"},
+						"command": map[string]any{"type": "string", "description": "Shell command to execute (use the same dialect as this session)"},
 					},
-					"required": []string{"name"},
+					"required": []string{"command"},
 				},
-			},
-		},
-		{
-			Type: "function",
-			Function: chatToolSchema{
-				Name:        "git_status",
-				Description: "Show git status --short for the current directory if this is a git repo.",
-				Parameters:  emptyObj,
 			},
 		},
 	}
@@ -138,7 +121,11 @@ func genOptions() map[string]any {
 	}
 }
 
-// Translate turns English into shell commands using chat, JSON schema, and at most one tool round.
+func modelSupportsTools(model string) bool {
+	return true
+}
+
+// Translate turns English into shell commands using chat, JSON schema, and an agentic tool loop.
 func (c *Client) Translate(ctx context.Context, req TranslateRequest) (Plan, []ChatMessage, error) {
 	if req.Env.Shell == "" {
 		req.Env.Shell = c.ShellName()
@@ -151,41 +138,89 @@ func (c *Client) Translate(ctx context.Context, req TranslateRequest) (Plan, []C
 	}
 
 	var tools []chatTool
-	if req.RunTool != nil {
+	if req.RunTool != nil && modelSupportsTools(c.generationModel) {
 		tools = translatorTools()
 	}
 
-	resp, err := c.doChat(ctx, msgs, tools, CommandFormat)
+	resp, err := c.doChat(ctx, msgs, tools, nil)
 	if err != nil {
-		return Plan{}, msgs, err
+		if len(tools) > 0 && strings.Contains(err.Error(), "does not support tools") {
+			tools = nil
+			resp, err = c.doChat(ctx, msgs, nil, nil)
+		}
+		if err != nil {
+			return Plan{}, msgs, err
+		}
 	}
 	msgs = append(msgs, resp.Message)
 
-	if len(resp.Message.ToolCalls) > 0 && req.RunTool != nil {
+	// Agentic loop: allow multiple rounds of tool calling for investigation.
+	// The LLM can call run_command, list_cwd, netstat, etc. to gather
+	// information before emitting the final JSON command plan.
+	const maxToolRounds = 5
+	pastTools := make(map[string]bool)
+	
+	for round := 0; round < maxToolRounds; round++ {
+		if len(resp.Message.ToolCalls) == 0 && req.RunTool != nil && strings.Contains(resp.Message.Content, "\"run_command\"") {
+			raw := extractJSONObject(resp.Message.Content)
+			if raw != "" {
+				var fake map[string]any
+				if json.Unmarshal([]byte(raw), &fake) == nil {
+					if name, ok := fake["name"].(string); ok && name == "run_command" {
+						if argsStr, ok := fake["arguments"].(string); ok {
+							resp.Message.ToolCalls = append(resp.Message.ToolCalls, ToolCall{Function: ToolCallFn{Name: name, Arguments: json.RawMessage(argsStr)}})
+						} else if argsObj, ok := fake["arguments"].(map[string]any); ok {
+							b, _ := json.Marshal(argsObj)
+							resp.Message.ToolCalls = append(resp.Message.ToolCalls, ToolCall{Function: ToolCallFn{Name: name, Arguments: json.RawMessage(b)}})
+						}
+					}
+				}
+			}
+		}
+
+		if len(resp.Message.ToolCalls) == 0 || req.RunTool == nil {
+			break
+		}
 		for i, tc := range resp.Message.ToolCalls {
-			if i >= 3 {
+			if i >= 5 {
 				break
 			}
-			out := req.RunTool(tc.Function.Name, tc.Function.ArgsMap())
+			
+			// Detect repetition
+			sig := tc.Function.Name + "|" + string(tc.Function.Arguments)
+			var out string
+			if pastTools[sig] {
+				out = "error: You already ran this exact command and it failed or yielded the same result. Do not repeat it. Try a different approach or output the final Plan."
+			} else {
+				pastTools[sig] = true
+				out = req.RunTool(tc.Function.Name, tc.Function.ArgsMap())
+			}
+			
 			msgs = append(msgs, ChatMessage{
 				Role:     "tool",
 				ToolName: tc.Function.Name,
 				Content:  trimForPrompt(out, 2000),
 			})
 		}
-		resp, err = c.doChat(ctx, msgs, nil, CommandFormat)
+		// On the last allowed round, omit tools to force the JSON plan.
+		var nextTools []chatTool
+		if round < maxToolRounds-1 {
+			nextTools = tools
+		}
+		resp, err = c.doChat(ctx, msgs, nextTools, nil)
 		if err != nil {
 			return Plan{}, msgs, err
 		}
 		msgs = append(msgs, resp.Message)
-		if len(resp.Message.ToolCalls) > 0 {
-			msgs = append(msgs, ChatMessage{Role: "user", Content: "Do not call tools. Emit the JSON command plan now."})
-			resp, err = c.doChat(ctx, msgs, nil, CommandFormat)
-			if err != nil {
-				return Plan{}, msgs, err
-			}
-			msgs = append(msgs, resp.Message)
+	}
+	// If the model is still requesting tools after exhausting rounds, force it.
+	if len(resp.Message.ToolCalls) > 0 {
+		msgs = append(msgs, ChatMessage{Role: "user", Content: "Do not call tools. Emit the JSON command plan now."})
+		resp, err = c.doChat(ctx, msgs, nil, nil)
+		if err != nil {
+			return Plan{}, msgs, err
 		}
+		msgs = append(msgs, resp.Message)
 	}
 
 	plan, err := ParsePlan(resp.Message.Content)
@@ -205,10 +240,10 @@ func (c *Client) Repair(ctx context.Context, msgs []ChatMessage, reason string) 
 	}
 	msgs = append(msgs, ChatMessage{
 		Role: "user",
-		Content: "The previous command was not usable.\n" + trimForPrompt(reason, 800) +
+		Content: "The previous command failed with this error:\n" + trimForPrompt(reason, 800) +
 			"\nEmit a corrected JSON plan for the original request. Same OS and shell.",
 	})
-	resp, err := c.doChat(ctx, msgs, nil, CommandFormat)
+	resp, err := c.doChat(ctx, msgs, nil, nil)
 	if err != nil {
 		return Plan{}, msgs, err
 	}
@@ -283,39 +318,41 @@ func (c *Client) buildTranslatorPrompt(env Env, examples []FewShot) string {
 	} else if bits := presentBits(c.availableBins); bits != "" {
 		present = "\n" + bits
 	}
-
 	shellNote := translatorShellNote(shell)
 	var ex strings.Builder
 	if len(examples) > 0 {
 		ex.WriteString("\nRecent successful translations on this machine:\n")
 		for _, e := range examples {
-			fmt.Fprintf(&ex, "- %q → %s\n", e.Input, e.Command)
+			cmds, _ := json.Marshal([]string{e.Command})
+			fmt.Fprintf(&ex, "- %q -> {\"explanation\": \"\", \"commands\": %s}\n", e.Input, cmds)
 		}
+	}
+
+	toolInstruction := ""
+	if modelSupportsTools(c.generationModel) {
+		toolInstruction = "\nYou have tools to investigate this machine before generating commands.\nUse run_command to execute shell commands and read their output when you need runtime data (ports, processes, disk info, etc.).\nInvestigate first, then emit the JSON plan. You may call tools multiple times."
 	}
 
 	return fmt.Sprintf(`You are nsh, a terminal command translator.
 OS: %s
 Shell: %s
 CWD: %s%s
-%s
-Respond with JSON only: {"commands":["..."],"dialect":"%s"}
+%s%s
+When you are done investigating and want to give the final commands to the user, respond with JSON ONLY:
+{"explanation": "any conversational text you want to say to the user", "commands":["..."],"dialect":"%s"}
 dialect must be exactly %s.
-At most 3 commands. No markdown. No explanations.
-You may call list_cwd, which, or git_status at most once if you need facts from this machine, then emit the JSON plan.
+At most 3 commands. No markdown.
 Do not invent filenames that are not in the listing or tool results.
-%s`, runtime.GOOS, shell, env.CWD, present, shellNote, NormalizeShell(shell), NormalizeShell(shell), ex.String())
+%s`, runtime.GOOS, shell, env.CWD, present, shellNote, toolInstruction, NormalizeShell(shell), NormalizeShell(shell), ex.String())
 }
 
 func translatorShellNote(shell string) string {
 	switch NormalizeShell(shell) {
 	case "powershell":
 		return `Use PowerShell (cmdlets, pipelines, $_).
-Prefer Get-ChildItem, Sort-Object, Select-Object, Get-Process, Get-Service, Get-NetTCPConnection, Select-String.
-To search file contents: Get-ChildItem -Recurse -File | Select-String -Pattern 'text'
-Do not use cmd.exe switches such as dir /b, dir /w, dir /o-s.
-No Out-GridView, Read-Host, pause, more, or other interactive UI.`
+No interactive UI elements (Read-Host, Out-GridView).`
 	case "cmd":
-		return `Use ONLY cmd.exe syntax. Do NOT use PowerShell cmdlets. Use dir, sort, findstr, type, for, forfiles.`
+		return `Use ONLY cmd.exe syntax. Use dir, sort, findstr, type, for, forfiles.`
 	default:
 		return `Use POSIX shell syntax for this OS.`
 	}

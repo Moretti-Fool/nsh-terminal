@@ -1,0 +1,7 @@
+output/
+venv/
+wsl_venv/
+wsl_tmp/
+*.log
+*.gguf
+__pycache__/
