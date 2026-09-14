@@ -385,30 +385,18 @@ func (r *REPL) handleNL(input string) {
 		judgeModel = "qwen2.5:0.5b"
 	}
 
-	verifyCommand := func(cmd string) bool {
-		verifyPrompt := fmt.Sprintf("The user requested: `%s`. The AI generated this shell command: `%s`. Does this command achieve the user's goal? Reply ONLY 'YES' or 'NO'.", input, cmd)
-		yes, err := r.ollama.AskJudge(ctx, judgeModel, verifyPrompt)
-		if err != nil {
-			return true // Fail-open to allow execution if the judge model is unavailable/crashes
-		}
-		return yes
-	}
-
 	// 1. Check local cache layer for exact or very similar past commands
 	cachedCmd := r.semanticCacheMatch(ctx, input, r.history.SuccessfulNL(200))
 	if cachedCmd != "" {
-		// Even if the input semantically matches a past query, we must verify the historical command actually solves it
-		if verifyCommand(cachedCmd) {
-			fmt.Printf("\n[nsh] (from memory) \033[36m> %s\033[0m\n", cachedCmd)
-			if r.confirmIfDestructive(cachedCmd) {
-				ok, result := r.runGeneratedCommands(cachedCmd)
-				if ok {
-					r.recordGenerated(cachedCmd)
-					r.saveHistory(input, "nl", cachedCmd, result.ExitCode, result.Output, result.DurationMs)
-				}
+		fmt.Printf("\n[nsh] (from memory) \033[36m> %s\033[0m\n", cachedCmd)
+		if r.confirmIfDestructive(cachedCmd) {
+			ok, result := r.runGeneratedCommands(cachedCmd)
+			if ok {
+				r.recordGenerated(cachedCmd)
+				r.saveHistory(input, "nl", cachedCmd, result.ExitCode, result.Output, result.DurationMs)
 			}
-			return
 		}
+		return
 	}
 
 	if !r.ollamaOK {
@@ -538,30 +526,22 @@ func (r *REPL) handleNL(input string) {
 	var rejectReason string
 
 	if success {
-		if verifyCommand(generated) {
-			handled, result, rejectReason = executeAndCheck()
-			if handled {
-				r.recordGenerated(generated)
-				r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
-				return
-			}
-		} else {
-			rejectReason = "The Semantic Judge rejected this command because it does not achieve the user's goal."
+		handled, result, rejectReason = executeAndCheck()
+		if handled {
+			r.recordGenerated(generated)
+			r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
+			return
 		}
 	}
 
 	if (!success || (!handled && rejectReason != "")) && r.cfg.Ollama.FallbackModel != "" && r.cfg.Ollama.FallbackModel != r.cfg.Ollama.GenerationModel {
 		success = tryModel(r.cfg.Ollama.FallbackModel, true)
 		if success {
-			if verifyCommand(generated) {
-				handled, result, rejectReason = executeAndCheck()
-				if handled {
-					r.recordGenerated(generated)
-					r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
-					return
-				}
-			} else {
-				rejectReason = "The Semantic Judge rejected this command because it does not achieve the user's goal."
+			handled, result, rejectReason = executeAndCheck()
+			if handled {
+				r.recordGenerated(generated)
+				r.saveHistory(input, "nl", generated, result.ExitCode, result.Output, result.DurationMs)
+				return
 			}
 		}
 	}
