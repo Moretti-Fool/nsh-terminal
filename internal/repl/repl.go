@@ -1405,8 +1405,10 @@ func (r *REPL) handleListModels() {
 	fmt.Println()
 	fmt.Printf("  Current generation model:  %s\n", r.ollama.GenerationModel())
 	fmt.Printf("  Current classifier model:  %s\n", r.ollama.ClassifierModel())
+	fmt.Printf("  Current fallback model:    %s\n", r.cfg.Ollama.FallbackModel)
+	fmt.Printf("  Current judge model:       %s\n", r.cfg.Ollama.JudgeModel)
 	fmt.Println()
-	fmt.Println("  Switch with: nsh model <name>")
+	fmt.Println("  Switch with: nsh model [classifier|fallback|judge] <name>")
 }
 
 func (r *REPL) handleSetModel(args []string) {
@@ -1415,8 +1417,11 @@ func (r *REPL) handleSetModel(args []string) {
 		fmt.Println("  nsh model <name>              Set generation model")
 		fmt.Println("  nsh model classifier <name>   Set classifier model")
 		fmt.Println("  nsh model fallback <name>     Set fallback model")
+		fmt.Println("  nsh model judge <name>        Set judge model")
 		fmt.Printf("\n  Current generation:  %s\n", r.ollama.GenerationModel())
 		fmt.Printf("  Current classifier:  %s\n", r.ollama.ClassifierModel())
+		fmt.Printf("  Current fallback:    %s\n", r.cfg.Ollama.FallbackModel)
+		fmt.Printf("  Current judge:       %s\n", r.cfg.Ollama.JudgeModel)
 		return
 	}
 	if args[0] == "classifier" {
@@ -1438,6 +1443,16 @@ func (r *REPL) handleSetModel(args []string) {
 		r.cfg.Ollama.FallbackModel = args[1]
 		config.Save(r.cfg, filepath.Join(config.Dir(), "config.toml"))
 		fmt.Printf("[nsh] Fallback model set to %s\n", args[1])
+		return
+	}
+	if args[0] == "judge" {
+		if len(args) < 2 {
+			fmt.Println("[nsh] Usage: nsh model judge <name>")
+			return
+		}
+		r.cfg.Ollama.JudgeModel = args[1]
+		config.Save(r.cfg, filepath.Join(config.Dir(), "config.toml"))
+		fmt.Printf("[nsh] Judge model set to %s\n", args[1])
 		return
 	}
 	r.ollama.SetGenerationModel(args[0])
@@ -1518,6 +1533,8 @@ Built-in commands:
   nsh models                     List available Ollama models
   nsh model <name>               Set generation model
   nsh model classifier <name>    Set classifier model
+  nsh model fallback <name>      Set fallback model
+  nsh model judge <name>         Set semantic judge model
   nsh theme <name>               Set color theme
   nsh record start               Start recording a workflow
   nsh record stop "name"         Stop recording and save as workflow

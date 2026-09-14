@@ -16,10 +16,10 @@ A cross-platform terminal that understands both shell commands and natural langu
 - **AI Search & Answers** — `ask what is kubernetes` gets an AI answer in the terminal. `google! <query>` gives both an AI answer and opens the browser.
 - **Cross-Platform** — Works on Windows, macOS, and Linux. On Windows, typed commands still use fast builtins/`cmd.exe`; natural language runs through a warm PowerShell host so cmdlets work without a 2–3s cold start per command.
 - **Structured History & Auto-Categorization Agent** — Background Auto-Categorization engine dynamically organizes command history by communicating with the local LLM async. Browse by day, search across domains, and replay past commands.
-- **RAG OS/Shell Filtering** — When retrieving context for AI features, nsh intelligently filters the vector store based on the active OS and shell environment, ensuring highly relevant responses.
+- **RAG OS/Shell Filtering** — Implements a lightweight, local in-memory vector database for chunk embeddings and semantic search. When retrieving context for AI features, nsh intelligently filters this vector store based on the active OS and shell environment, ensuring highly relevant responses.
 - **Robust JSON Extraction** — Employs a resilient plan parsing logic that grabs the last valid JSON object in a response (often the final generation) and safely falls back to the first.
-- **Semantic Caching & Verification (LLM Router)** — Uses a lightning-fast sub-billion parameter model (`qwen2.5:0.5b`) to judge intents. It acts as an instant Semantic Cache to bypass generation, verifies commands before execution, and automatically triggers fallbacks for "empty" shell outputs.
-- **Double Ladder Fallback** — Specify a fallback model in config (`fallback_model`) that nsh automatically switches to if the primary generation model fails or produces a completely blank output.
+- **Semantic Caching & Verification (LLM Router)** — Uses a lightning-fast sub-billion parameter model (set via `nsh model judge <name>`, e.g., `qwen2.5:0.5b`) to judge intents. It acts as an instant Semantic Cache to bypass generation, verifies commands before execution, and automatically triggers fallbacks for "empty" shell outputs.
+- **Double Ladder Fallback** — Set a fallback model via `nsh model fallback <name>` that nsh automatically switches to if the primary generation model fails or produces a completely blank output. The execution layer also utilizes a double ladder approach on Windows (warm host -> restart -> run once) for robustness.
 - **Automated Fine-Tuning Pipeline** — Import `.jsonl` datasets with `nsh learn-import` to fine-tune the system's local memory and improve performance on custom tasks.
 - **Destructive Command Safety** — Detects dangerous commands (`rm -rf`, `DROP TABLE`, etc.) and asks for confirmation.
 - **Graceful Degradation** — Works as a normal shell even when Ollama isn't running. NL features simply become unavailable.
@@ -185,6 +185,7 @@ nsh down
 | `nsh model <name>` | Set generation model |
 | `nsh model classifier <name>` | Set classifier model |
 | `nsh model fallback <name>` | Set fallback generation model |
+| `nsh model judge <name>` | Set semantic judge model |
 | `nsh learn-import <file>` | Import `.jsonl` dataset to fine-tune local memory |
 | `nsh theme <name>` | Set color theme |
 | `nsh run <description>` | Generate and run a Python script |
@@ -221,7 +222,10 @@ Config file location:
 url = "http://localhost:11434"
 classifier_model = "nsh-local"
 generation_model = "nsh-local"
-timeout_ms = 10000
+fallback_model = "qwen2.5-coder:3b"
+judge_model = "qwen2.5:0.5b"
+timeout_ms = 45000
+max_retries = 3
 
 [shell]
 default = "auto"

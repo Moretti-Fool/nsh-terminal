@@ -66,7 +66,10 @@ Getting started:
 Interactive commands:
   nsh help                  show full command reference
   nsh models                list / switch Ollama models
+  nsh model <name>          set generation model
+  nsh model classifier <name> set classifier model
   nsh model fallback <name> set fallback model
+  nsh model judge <name>    set semantic judge model
   nsh learn-import <file>   import jsonl dataset for fine-tuning
   nsh run <description>     generate and run a Python script
   nsh up <workflow>          launch parallel services
