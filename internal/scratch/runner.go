@@ -126,7 +126,11 @@ func defaultScratchDir() string {
 }
 
 func findPython() string {
-	for _, name := range []string{"python3", "python"} {
+	names := []string{"python3", "python"}
+	if runtime.GOOS == "windows" {
+		names = []string{"python", "python3"}
+	}
+	for _, name := range names {
 		if _, err := exec.LookPath(name); err == nil {
 			return name
 		}
