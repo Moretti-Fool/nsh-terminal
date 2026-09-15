@@ -31,7 +31,7 @@ func TestBuildSystemPrompt(t *testing.T) {
 	if strings.Contains(prompt, "ipconfig") {
 		t.Error("should not dump the full bin list")
 	}
-	if !strings.Contains(prompt, "Get-ChildItem") {
+	if !strings.Contains(prompt, "cmdlets") {
 		t.Error("should mention PowerShell cmdlets")
 	}
 }
