@@ -10,18 +10,21 @@ A cross-platform terminal that understands both shell commands and natural langu
 - **Instant Execution** — Common commands (`ls`, `cat`, `grep`, `find`, `cp`, `mv`, `rm`, `mkdir`, `touch`, `head`, `tail`, `wc`, `echo`, `which`) run as Go-native builtins with zero shell overhead. Other binaries exec directly; shell is only used for pipes, redirects, and globs.
 - **Smart Input Detection** — Automatically determines if your input is a command, natural language, a search query, or a workflow name. No prefixes needed; 90%+ of inputs are classified without any LLM call.
 - **Natural Language to Commands** — Describe what you want ("show files sorted by size", "what's using port 8080") and nsh translates it into the right shell command using a local Ollama model.
+- **Conversational Memory** — The terminal remembers your last 5 commands within a session, so you can issue follow-ups like "stop the nginx one" or "do the same for the src folder".
+- **Pre-Execution Effects Engine** — A fast, non-LLM regex engine analyzes generated commands and provides a safety preview (e.g. `[moderate] Installs npm packages (reversible)`) before execution.
+- **Command Predictor** — A local statistical n-gram model tracks your session patterns and directory-specific usage to suggest your 5 most likely next commands via `nsh predict`.
 - **Python Scratch Workspace** — Say "open sales.csv with pandas" or `nsh run <description>` and nsh generates a Python script, auto-creates a venv, installs dependencies, and runs it. Scripts saved for reuse.
 - **Parallel Service Launcher** — Define your dev stack in a workflow file and launch everything with `nsh up`. Color-coded log streaming, one-command shutdown with `nsh down`.
 - **Workflow Recording & Replay** — Record a sequence of commands, save it with a name, and replay it anytime. Ctrl+C interrupts the current command without cancelling the recording.
 - **AI Search & Answers** — `ask what is kubernetes` gets an AI answer in the terminal. `google! <query>` gives both an AI answer and opens the browser.
 - **Cross-Platform** — Works on Windows, macOS, and Linux. On Windows, typed commands still use fast builtins/`cmd.exe`; natural language runs through a warm PowerShell host so cmdlets work without a 2–3s cold start per command.
 - **Structured History & Auto-Categorization Agent** — Background Auto-Categorization engine dynamically organizes command history by communicating with the local LLM async. Browse by day, search across domains, and replay past commands.
-- **RAG OS/Shell Filtering** — Implements a lightweight, local in-memory vector database for chunk embeddings and semantic search. When retrieving context for AI features, nsh intelligently filters this vector store based on the active OS and shell environment, ensuring highly relevant responses.
+- **RAG OS/Shell Filtering & Context-Aware Examples** — Implements a lightweight, local in-memory vector database. When retrieving few-shot examples, nsh includes directory context (`CWD`) so the model learns that you use different commands in different project environments.
 - **Robust JSON Extraction** — Employs a resilient plan parsing logic that grabs the last valid JSON object in a response (often the final generation) and safely falls back to the first.
 - **Semantic Caching & Verification (LLM Router)** — Uses a lightning-fast sub-billion parameter model (set via `nsh model judge <name>`, e.g., `qwen2.5:0.5b`) to judge intents. It acts as an instant Semantic Cache to bypass generation, verifies commands before execution, and automatically triggers fallbacks for "empty" shell outputs.
 - **Double Ladder Fallback** — Set a fallback model via `nsh model fallback <name>` that nsh automatically switches to if the primary generation model fails or produces a completely blank output. The execution layer also utilizes a double ladder approach on Windows (warm host -> restart -> run once) for robustness.
-- **Automated Fine-Tuning Pipeline** — Import `.jsonl` datasets with `nsh learn-import` to fine-tune the system's local memory and improve performance on custom tasks.
-- **Destructive Command Safety** — Detects dangerous commands (`rm -rf`, `DROP TABLE`, etc.) and asks for confirmation.
+- **Automated Fine-Tuning Pipeline & Data Export** — Generate fine-tuning datasets from your own usage instantly with `nsh export-training`. Import `.jsonl` datasets with `nsh learn-import` to fine-tune the system's local memory and improve performance on custom tasks.
+- **Destructive Command Safety** — Detects dangerous commands (`rm -rf`, `DROP TABLE`, etc.) and asks for confirmation, aided by the effects prediction engine.
 - **Graceful Degradation** — Works as a normal shell even when Ollama isn't running. NL features simply become unavailable.
 - **Customizable** — Choose your Ollama model, color theme, prompt style, scratch directory, and more via `config.toml`.
 
@@ -187,6 +190,9 @@ nsh down
 | `nsh model fallback <name>` | Set fallback generation model |
 | `nsh model judge <name>` | Set semantic judge model |
 | `nsh learn-import <file>` | Import `.jsonl` dataset to fine-tune local memory |
+| `nsh export-training [f]`| Export successful NL history as fine-tuning dataset |
+| `nsh predict` | Show top 5 predicted next commands based on session patterns |
+| `nsh effects <command>` | Predict safety, risk, and category of a command |
 | `nsh theme <name>` | Set color theme |
 | `nsh run <description>` | Generate and run a Python script |
 | `nsh scratch` | Show scratch directory location |
