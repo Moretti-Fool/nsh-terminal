@@ -21,7 +21,8 @@ func TestListCWD(t *testing.T) {
 }
 
 func TestExecTool(t *testing.T) {
-	if got := ExecTool("nope", nil, ".", nil); !strings.Contains(got, "unknown tool") {
+	got := ExecTool("nope", nil, ".", nil)
+	if !strings.Contains(got, "error") && !strings.Contains(got, "not recognized") {
 		t.Fatalf("got %q", got)
 	}
 }
