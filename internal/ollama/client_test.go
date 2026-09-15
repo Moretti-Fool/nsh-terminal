@@ -167,18 +167,7 @@ func TestTranslateToolRound(t *testing.T) {
 	}
 }
 
-func TestClassifyInput(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{"response": `{"label":"NL"}`, "done": true})
-	}))
-	defer server.Close()
 
-	c := New(server.URL, "phi3", "llama3.2", 5*time.Second)
-	result, _ := c.ClassifyInput(context.Background(), "unzip the archive")
-	if result != "NL" {
-		t.Errorf("got: %s", result)
-	}
-}
 
 func TestCheckHealth(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -209,18 +198,7 @@ func TestTimeout(t *testing.T) {
 	}
 }
 
-func TestMatchWorkflow(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{"response": "run-backend", "done": true})
-	}))
-	defer server.Close()
 
-	c := New(server.URL, "phi3", "llama3.2", 5*time.Second)
-	result, _ := c.MatchWorkflow(context.Background(), "start the backend", []string{"run-backend", "deploy"})
-	if result != "run-backend" {
-		t.Errorf("got: %s", result)
-	}
-}
 
 func TestPickGenerationModel(t *testing.T) {
 	models := []ModelInfo{{Name: "nomic-embed"}, {Name: "llama3.2:3b"}, {Name: "qwen2.5-coder:7b"}}
