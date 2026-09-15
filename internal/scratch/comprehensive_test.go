@@ -285,25 +285,3 @@ func TestImportReComprehensive(t *testing.T) {
 		}
 	}
 }
-
-func TestRunnerPipPathVenvPython(t *testing.T) {
-	t.Parallel()
-	r := NewRunner("/test", "python")
-	pip := r.pipPath()
-	py := r.venvPython()
-	if runtime.GOOS == "windows" {
-		if !strings.HasSuffix(pip, "pip.exe") || !strings.Contains(pip, "Scripts") {
-			t.Errorf("pipPath on windows incorrect: %s", pip)
-		}
-		if !strings.HasSuffix(py, "python.exe") || !strings.Contains(py, "Scripts") {
-			t.Errorf("venvPython on windows incorrect: %s", py)
-		}
-	} else {
-		if !strings.HasSuffix(pip, "pip") || !strings.Contains(pip, "bin") {
-			t.Errorf("pipPath on unix incorrect: %s", pip)
-		}
-		if !strings.HasSuffix(py, "python") || !strings.Contains(py, "bin") {
-			t.Errorf("venvPython on unix incorrect: %s", py)
-		}
-	}
-}

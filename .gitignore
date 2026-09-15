@@ -13,3 +13,9 @@ nsh-*.exe
 training/llama.cpp/
 training/unsloth_compiled_cache/
 .env
+demo*
+dummy
+wsl*
+*.tape
+nsh_linux
+fix_conf.sh

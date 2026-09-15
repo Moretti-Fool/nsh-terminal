@@ -126,7 +126,11 @@ func defaultScratchDir() string {
 }
 
 func findPython() string {
-	for _, name := range []string{"python3", "python"} {
+	names := []string{"python3", "python"}
+	if runtime.GOOS == "windows" {
+		names = []string{"python", "python3"}
+	}
+	for _, name := range names {
 		if _, err := exec.LookPath(name); err == nil {
 			return name
 		}
@@ -181,8 +185,8 @@ func (r *Runner) MapToPip(imports []string) []string {
 }
 
 func (r *Runner) EnsureVenv() error {
-	pipPath := r.pipPath()
-	if _, err := os.Stat(pipPath); err == nil {
+	pyPath := r.venvPython()
+	if _, err := os.Stat(pyPath); err == nil {
 		return nil
 	}
 
@@ -234,8 +238,8 @@ func (r *Runner) InstallMissing(packages []string) error {
 	}
 
 	fmt.Printf("[nsh] Installing: %s\n", strings.Join(toInstall, ", "))
-	args := append([]string{"install", "-q"}, toInstall...)
-	cmd := exec.Command(r.pipPath(), args...)
+	args := append([]string{"-m", "pip", "install", "-q"}, toInstall...)
+	cmd := exec.Command(r.venvPython(), args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
@@ -295,7 +299,7 @@ func (r *Runner) Run(input, script string) error {
 }
 
 func (r *Runner) refreshInstalled() {
-	cmd := exec.Command(r.pipPath(), "list", "--format=columns")
+	cmd := exec.Command(r.venvPython(), "-m", "pip", "list", "--format=columns")
 	output, err := cmd.Output()
 	if err != nil {
 		return
@@ -309,14 +313,19 @@ func (r *Runner) refreshInstalled() {
 	}
 }
 
-func (r *Runner) pipPath() string {
-	if runtime.GOOS == "windows" {
-		return filepath.Join(r.venvDir, "Scripts", "pip.exe")
-	}
-	return filepath.Join(r.venvDir, "bin", "pip")
-}
 
 func (r *Runner) venvPython() string {
+	candidates := []string{
+		filepath.Join(r.venvDir, "Scripts", "python.exe"),
+		filepath.Join(r.venvDir, "bin", "python.exe"),
+		filepath.Join(r.venvDir, "bin", "python"),
+		filepath.Join(r.venvDir, "bin", "python3"),
+	}
+	for _, cand := range candidates {
+		if _, err := os.Stat(cand); err == nil {
+			return cand
+		}
+	}
 	if runtime.GOOS == "windows" {
 		return filepath.Join(r.venvDir, "Scripts", "python.exe")
 	}
