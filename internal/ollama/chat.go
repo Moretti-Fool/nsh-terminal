@@ -15,6 +15,17 @@ import (
 type FewShot struct {
 	Input   string
 	Command string
+	CWD     string // optional: directory context where this translation succeeded
+}
+
+// SessionEntry records a recent command and its result within the current session.
+// This enables conversational context ("stop the nginx one" after "show docker containers").
+type SessionEntry struct {
+	Input     string // what the user typed (NL or command)
+	Command   string // what actually ran (may differ from Input for NL translations)
+	Output    string // trimmed output preview
+	CWD       string // working directory at time of execution
+	ExitCode  int
 }
 
 // Env is machine evidence injected into the translator.
@@ -30,10 +41,11 @@ type ToolFunc func(name string, args map[string]any) string
 
 // TranslateRequest is one NL-to-command attempt.
 type TranslateRequest struct {
-	Input    string
-	Env      Env
-	Examples []FewShot
-	RunTool  ToolFunc
+	Input          string
+	Env            Env
+	Examples       []FewShot
+	RunTool        ToolFunc
+	SessionContext []SessionEntry // recent commands from this session for conversational memory
 }
 
 type chatRequest struct {
@@ -134,8 +146,39 @@ func (c *Client) Translate(ctx context.Context, req TranslateRequest) (Plan, []C
 	user := buildUserMessage(req.Input, req.Env)
 	msgs := []ChatMessage{
 		{Role: "system", Content: system},
-		{Role: "user", Content: user},
 	}
+
+	// Inject session context as prior conversation turns so the model
+	// can resolve references like "stop the nginx one" or "do the same for src/".
+	for _, se := range req.SessionContext {
+		var sessionUser string
+		if se.Command != se.Input && se.Command != "" {
+			sessionUser = fmt.Sprintf("User wants to: %s", se.Input)
+		} else {
+			sessionUser = se.Input
+		}
+		msgs = append(msgs, ChatMessage{Role: "user", Content: sessionUser})
+
+		var sessionAssistant strings.Builder
+		if se.Command != "" && se.Command != se.Input {
+			fmt.Fprintf(&sessionAssistant, "> %s\n", se.Command)
+		} else {
+			fmt.Fprintf(&sessionAssistant, "> %s\n", se.Input)
+		}
+		if se.Output != "" {
+			out := se.Output
+			if len(out) > 500 {
+				out = out[:500] + "..."
+			}
+			fmt.Fprintf(&sessionAssistant, "Output:\n%s\n", out)
+		}
+		if se.ExitCode != 0 {
+			fmt.Fprintf(&sessionAssistant, "Exit code: %d\n", se.ExitCode)
+		}
+		msgs = append(msgs, ChatMessage{Role: "assistant", Content: sessionAssistant.String()})
+	}
+
+	msgs = append(msgs, ChatMessage{Role: "user", Content: user})
 
 	var tools []chatTool
 	if req.RunTool != nil && modelSupportsTools(c.generationModel) {
@@ -324,7 +367,11 @@ func (c *Client) buildTranslatorPrompt(env Env, examples []FewShot) string {
 		ex.WriteString("\nRecent successful translations on this machine:\n")
 		for _, e := range examples {
 			cmds, _ := json.Marshal([]string{e.Command})
-			fmt.Fprintf(&ex, "- %q -> {\"explanation\": \"\", \"commands\": %s}\n", e.Input, cmds)
+			if e.CWD != "" {
+				fmt.Fprintf(&ex, "- (in %s) %q -> {\"explanation\": \"\", \"commands\": %s}\n", e.CWD, e.Input, cmds)
+			} else {
+				fmt.Fprintf(&ex, "- %q -> {\"explanation\": \"\", \"commands\": %s}\n", e.Input, cmds)
+			}
 		}
 	}
 

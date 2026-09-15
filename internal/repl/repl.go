@@ -17,10 +17,12 @@ import (
 	"github.com/Moretti-Fool/nsh-terminal/internal/categorizer"
 	"github.com/Moretti-Fool/nsh-terminal/internal/classifier"
 	"github.com/Moretti-Fool/nsh-terminal/internal/config"
+	"github.com/Moretti-Fool/nsh-terminal/internal/effects"
 	"github.com/Moretti-Fool/nsh-terminal/internal/executor"
 	"github.com/Moretti-Fool/nsh-terminal/internal/ground"
 	"github.com/Moretti-Fool/nsh-terminal/internal/history"
 	"github.com/Moretti-Fool/nsh-terminal/internal/ollama"
+	"github.com/Moretti-Fool/nsh-terminal/internal/predict"
 	"github.com/Moretti-Fool/nsh-terminal/internal/rag"
 	"github.com/Moretti-Fool/nsh-terminal/internal/scratch"
 	"github.com/Moretti-Fool/nsh-terminal/internal/search"
@@ -28,6 +30,8 @@ import (
 )
 
 const Version = "1.1.0"
+
+const maxSessionCtx = 5
 
 type REPL struct {
 	cfg         config.Config
@@ -44,6 +48,8 @@ type REPL struct {
 	ollamaOK    bool
 	services    *executor.ServiceRunner
 	ragStore    *rag.Store
+	sessionCtx  []ollama.SessionEntry // conversational memory within current session
+	predictor   *predict.Predictor    // command prediction engine
 }
 
 func New(cfg config.Config) *REPL {
@@ -88,6 +94,7 @@ func New(cfg config.Config) *REPL {
 		ollamaOK:    ollamaClient.CheckHealth(),
 		services:    executor.NewServiceRunner(),
 		ragStore:    rStore,
+		predictor:   predict.New(),
 	}
 	r.autoDetectModel()
 	return r
@@ -435,9 +442,10 @@ func (r *REPL) handleNL(input string) {
 		}
 
 		p, m, err := r.ollama.Translate(ctx, ollama.TranslateRequest{
-			Input:    input,
-			Env:      ollama.Env{CWD: snap.CWD, Shell: shell, Listing: snap.Listing, Present: snap.Present},
-			Examples: fewShots,
+			Input:          input,
+			Env:            ollama.Env{CWD: snap.CWD, Shell: shell, Listing: snap.Listing, Present: snap.Present},
+			Examples:       fewShots,
+			SessionContext: r.sessionCtx,
 			RunTool: func(name string, args map[string]any) string {
 				if name == "run_command" {
 					cmdStr := fmt.Sprint(args["command"])
@@ -501,6 +509,11 @@ func (r *REPL) handleNL(input string) {
 		}
 		if r.cfg.UI.ShowGeneratedCommand {
 			fmt.Printf("\033[36m> %s\033[0m\n", generated)
+			// Show effect prediction for the generated command
+			eff := effects.Predict(generated, cwd)
+			if eff.Category != "unknown" {
+				fmt.Printf("\033[90m  %s\033[0m\n", eff.FormatPreview())
+			}
 		}
 		if !r.confirmIfDestructive(generated) {
 			return true, executor.RunResult{}, ""
@@ -611,7 +624,7 @@ func (r *REPL) nlFewShots(ctx context.Context, input string) []ollama.FewShot {
 	if len(out) == 0 {
 		entries := r.history.SuccessfulNL(3)
 		for _, e := range entries {
-			out = append(out, ollama.FewShot{Input: e.Input, Command: e.Generated})
+			out = append(out, ollama.FewShot{Input: e.Input, Command: e.Generated, CWD: e.CWD})
 		}
 	}
 
@@ -900,6 +913,12 @@ func (r *REPL) handleBuiltin(input string) {
 	case "scratch":
 		fmt.Printf("[nsh] Scratch directory: %s\n", r.scratch.ScriptsDir())
 		fmt.Println("      Generated Python scripts are saved here.")
+	case "export-training":
+		r.handleExportTraining(args)
+	case "predict":
+		r.handlePredict()
+	case "effects":
+		r.handleEffects(args)
 	default:
 		fmt.Printf("[nsh] Unknown command: nsh %s\n", parts[1])
 		fmt.Println("Run \"nsh help\" for available commands.")
@@ -1558,6 +1577,9 @@ Built-in commands:
   nsh replay HH:MM               Show details of a command at that time
   nsh replay HH:MM --run         Re-execute that command
   nsh learn-import <file>        Import dataset to fine-tune local memory
+  nsh export-training [file]     Export successful NL history as training data
+  nsh predict                    Show predicted next commands based on patterns
+  nsh effects <command>          Predict what a command will do before running it
   nsh config                     Open config in your editor
   exit / quit                    Exit nsh
 `, Version)
@@ -1579,10 +1601,115 @@ func (r *REPL) saveHistory(input, inputType, generated string, exitCode int, out
 		DurationMs:    durationMs,
 	})
 
+	// Update session context for conversational memory
+	cmd := generated
+	if cmd == "" {
+		cmd = input
+	}
+	preview := output
+	if len(preview) > 500 {
+		preview = preview[:500]
+	}
+	r.appendSessionContext(ollama.SessionEntry{
+		Input:    input,
+		Command:  cmd,
+		Output:   preview,
+		CWD:      cwd,
+		ExitCode: exitCode,
+	})
+
+	// Feed command into predictor for pattern learning
+	if r.predictor != nil {
+		r.predictor.Record(cmd, cwd, exitCode)
+	}
+
 	// Dispatch background categorization
 	if r.categorizer != nil {
 		r.categorizer.CategorizeAsync(input, generated, output)
 	}
+}
+
+// appendSessionContext maintains a rolling window of recent commands for conversational memory.
+func (r *REPL) appendSessionContext(entry ollama.SessionEntry) {
+	r.sessionCtx = append(r.sessionCtx, entry)
+	if len(r.sessionCtx) > maxSessionCtx {
+		r.sessionCtx = r.sessionCtx[len(r.sessionCtx)-maxSessionCtx:]
+	}
+}
+
+// handleExportTraining exports successful NL translations as fine-tuning data.
+func (r *REPL) handleExportTraining(args []string) {
+	shell := r.executor.NLShellName()
+	osName := runtime.GOOS
+
+	examples, err := r.history.ExportTraining(shell, osName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[nsh] export error: %v\n", err)
+		return
+	}
+	if len(examples) == 0 {
+		fmt.Println("[nsh] No successful NL translations found in history.")
+		fmt.Println("      Use natural language commands first, then export.")
+		return
+	}
+
+	outPath := filepath.Join(config.Dir(), "nsh_training_export.jsonl")
+	if len(args) > 0 {
+		outPath = args[0]
+	}
+
+	if err := history.WriteTrainingJSONL(outPath, examples); err != nil {
+		fmt.Fprintf(os.Stderr, "[nsh] write error: %v\n", err)
+		return
+	}
+	fmt.Printf("[nsh] Exported %d training examples to %s\n", len(examples), outPath)
+	fmt.Println("      Import into training pipeline: cp this file to training/data/")
+}
+
+// handlePredict shows next-command predictions based on session patterns.
+func (r *REPL) handlePredict() {
+	if r.predictor == nil {
+		fmt.Println("[nsh] Predictor not initialized.")
+		return
+	}
+
+	cwd, _ := os.Getwd()
+	suggestions := r.predictor.Suggest(cwd, 5)
+	if len(suggestions) == 0 {
+		fmt.Println("[nsh] No predictions yet. Run more commands to build patterns.")
+		return
+	}
+
+	fmt.Println("[nsh] Predicted next commands:")
+	for i, s := range suggestions {
+		fmt.Printf("  %d. %-40s  \033[90m(%s, score: %.2f)\033[0m\n", i+1, s.Command, s.Reason, s.Score)
+	}
+}
+
+// handleEffects shows the predicted effect of a command.
+func (r *REPL) handleEffects(args []string) {
+	if len(args) == 0 {
+		fmt.Println("[nsh] Usage: nsh effects <command>")
+		fmt.Println("      Predicts what a command will do before running it.")
+		fmt.Println()
+		fmt.Println("  Examples:")
+		fmt.Println(`    nsh effects rm -rf node_modules`)
+		fmt.Println(`    nsh effects git push origin main`)
+		fmt.Println(`    nsh effects npm install express`)
+		return
+	}
+
+	cmd := strings.Join(args, " ")
+	cwd, _ := os.Getwd()
+	eff := effects.Predict(cmd, cwd)
+
+	fmt.Printf("\n  Command:    %s\n", cmd)
+	fmt.Printf("  Category:   %s\n", eff.Category)
+	fmt.Printf("  Risk:       %s\n", eff.Risk)
+	fmt.Printf("  Modifies:   %v\n", eff.WriteOp)
+	fmt.Printf("  Reversible: %v\n", eff.Reversible)
+	fmt.Printf("  Summary:    %s\n", eff.Summary)
+	fmt.Printf("  Preview:    %s\n\n", eff.FormatPreview())
 }
 
 func pickEditor() string {

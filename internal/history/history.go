@@ -222,3 +222,72 @@ func readJSONLFile(path string) ([]Entry, error) {
 	}
 	return entries, scanner.Err()
 }
+
+// TrainingExample is a single exportable training pair for fine-tuning.
+type TrainingExample struct {
+	Messages []TrainingMessage `json:"messages"`
+}
+
+// TrainingMessage is a single turn in a training conversation.
+type TrainingMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// ExportTraining extracts successful NL translations from history
+// and formats them as training examples compatible with the nsh fine-tuning pipeline.
+// It filters for entries where: Type=="nl", ExitCode==0, Generated is non-empty.
+// The system prompt matches the runtime prompt format from internal/ollama/chat.go.
+func (h *History) ExportTraining(shell, osName string) ([]TrainingExample, error) {
+	entries := h.LastN(10000)
+	var examples []TrainingExample
+	seen := make(map[string]bool)
+
+	for _, e := range entries {
+		if e.Type == "nl" && e.ExitCode == 0 && e.Generated != "" {
+			key := e.Input + "\x00" + e.Generated
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+
+			sysMsg := fmt.Sprintf("You are nsh, a terminal command translator.\nOS: %s\nShell: %s\nCWD: %s\nRespond with JSON ONLY: {\"commands\":[\"...\"],\"dialect\":\"%s\"}\nAt most 3 commands. No markdown.", osName, shell, e.CWD, shell)
+
+			type assistResp struct {
+				Commands []string `json:"commands"`
+				Dialect  string   `json:"dialect"`
+			}
+			respBytes, _ := json.Marshal(assistResp{
+				Commands: []string{e.Generated},
+				Dialect:  shell,
+			})
+
+			ex := TrainingExample{
+				Messages: []TrainingMessage{
+					{Role: "system", Content: sysMsg},
+					{Role: "user", Content: e.Input},
+					{Role: "assistant", Content: string(respBytes)},
+				},
+			}
+			examples = append(examples, ex)
+		}
+	}
+	return examples, nil
+}
+
+// WriteTrainingJSONL writes training examples to a JSONL file.
+func WriteTrainingJSONL(path string, examples []TrainingExample) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	enc := json.NewEncoder(f)
+	for _, ex := range examples {
+		if err := enc.Encode(ex); err != nil {
+			return err
+		}
+	}
+	return nil
+}
