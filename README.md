@@ -32,7 +32,7 @@ A cross-platform terminal that understands both shell commands and natural langu
 Requires [Go 1.26.4+](https://go.dev/dl/).
 
 ```bash
-go install github.com/Moretti-Fool/nsh-terminal@latest
+go install github.com/Moretti-Fool/nsh-terminal@v1.2.1-lora
 ```
 
 ### Build from Repository
