@@ -1,6 +1,6 @@
 # nsh - The Natural Shell
 
-**Version:** v1.1.0  
+**Version:** v1.2.1-lora  
 **Developed by:** Sanchit
 
 A cross-platform terminal that understands both shell commands and natural language. Type commands normally, or describe what you want in plain English — nsh figures out the rest using local LLMs via Ollama. Single Go binary, no dependencies.
