@@ -29,7 +29,7 @@ A cross-platform terminal that understands both shell commands and natural langu
 
 ### From Source (recommended)
 
-Requires [Go 1.21+](https://go.dev/dl/).
+Requires [Go 1.26.4+](https://go.dev/dl/).
 
 ```bash
 go install github.com/Moretti-Fool/nsh-terminal@latest
@@ -54,7 +54,7 @@ Download pre-built binaries from the [Releases](https://github.com/Moretti-Fool/
 
 ## Requirements
 
-- **Required:** Go 1.21+ (to build)
+- **Required:** Go 1.26.4+ (to build)
 - **Optional:** [Ollama](https://ollama.ai) (for natural language features and Python script generation)
 - **Optional:** Python 3 (for scratch workspace)
 
